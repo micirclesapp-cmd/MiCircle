@@ -61,6 +61,6 @@ export default {
       googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY,
       perspectiveApiKey: process.env.PERSPECTIVE_API_KEY,
     },
-    owner: 'srikanthsriram',
+    owner: 'micircles',
   },
 };
