@@ -64,6 +64,7 @@ export default function CreateCircleStep3({
       const currentUser = auth.currentUser;
       if (!currentUser) {
         Alert.alert('Error', 'You must be logged in');
+        setLoading(false);
         return;
       }
 
@@ -72,11 +73,27 @@ export default function CreateCircleStep3({
       const userSnap = await getDoc(userDocRef);
 
       if (!userSnap.exists()) {
-        Alert.alert('Error', 'User profile not found');
+        console.error('User profile not found for uid:', currentUser.uid);
+        Alert.alert(
+          'Error',
+          'User profile not found. Please complete your profile setup first.'
+        );
+        setLoading(false);
         return;
       }
 
       const userData = userSnap.data();
+
+      // Validate user data
+      if (!userData.displayName) {
+        console.error('User displayName missing');
+        Alert.alert(
+          'Error',
+          'Please complete your profile setup before creating a circle.'
+        );
+        setLoading(false);
+        return;
+      }
 
       // Generate invite token
       const inviteToken = generateInviteToken();
@@ -109,12 +126,29 @@ export default function CreateCircleStep3({
       };
 
       // Write to Firestore
+      console.log('Creating circle:', circleId);
       await setDoc(doc(firestore, 'circles', circleId), circleDoc);
+      console.log('Circle created successfully');
 
+      setLoading(false);
       onSuccess(circleId);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating circle:', error);
-      Alert.alert('Error', 'Failed to create circle. Please try again.');
+      console.error('Error code:', error.code);
+      console.error('Error message:', error.message);
+      
+      let errorMessage = 'Failed to create circle. Please try again.';
+      
+      // Provide more specific error messages
+      if (error.code === 'permission-denied') {
+        errorMessage = 'Permission denied. Please check your Firestore security rules.';
+      } else if (error.code === 'unavailable') {
+        errorMessage = 'Network error. Please check your internet connection.';
+      } else if (error.message) {
+        errorMessage = `Error: ${error.message}`;
+      }
+      
+      Alert.alert('Error', errorMessage);
       setLoading(false);
     }
   };
