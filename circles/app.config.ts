@@ -3,7 +3,7 @@ import Constants from 'expo-constants';
 export default {
   expo: {
     name: 'Circles',
-    slug: 'circles-app',
+    slug: 'circleapp',
     version: '1.0.0',
     orientation: 'portrait',
     icon: './assets/icon.png',
