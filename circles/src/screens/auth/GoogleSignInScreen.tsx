@@ -6,13 +6,15 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   StyleSheet,
+  Alert,
 } from 'react-native';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
 import { auth } from '../../services/firebase';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { Routes } from '../../constants/routes';
 import Svg, { Circle } from 'react-native-svg';
+import { Ionicons } from '@expo/vector-icons';
 
 /**
  * CirclesLogo
@@ -40,6 +42,7 @@ export default function GoogleSignInScreen({ navigation }: any) {
   const [isSignUp, setIsSignUp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleAuth = async () => {
     if (!email || !password) {
@@ -60,8 +63,11 @@ export default function GoogleSignInScreen({ navigation }: any) {
         // Create new account
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
         console.log('User created:', userCredential.user.uid);
-        // Navigate to onboarding
-        navigation.navigate(Routes.DISPLAY_NAME);
+        // Auto-navigate to login after signup
+        setIsSignUp(false);
+        setPassword('');
+        setError('');
+        Alert.alert('Success', 'Account created! Please sign in with your credentials.');
       } else {
         // Sign in existing user
         const userCredential = await signInWithEmailAndPassword(auth, email, password);
@@ -82,6 +88,34 @@ export default function GoogleSignInScreen({ navigation }: any) {
         setError('Invalid email address.');
       } else {
         setError(err.message || 'Authentication failed. Please try again.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    if (!email) {
+      setError('Please enter your email address first');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      await sendPasswordResetEmail(auth, email);
+      Alert.alert(
+        'Password Reset Email Sent',
+        'Check your email for instructions to reset your password.',
+        [{ text: 'OK' }]
+      );
+    } catch (err: any) {
+      console.error('Password reset error:', err);
+      if (err.code === 'auth/user-not-found') {
+        setError('No account found with this email.');
+      } else if (err.code === 'auth/invalid-email') {
+        setError('Invalid email address.');
+      } else {
+        setError('Failed to send reset email. Please try again.');
       }
     } finally {
       setLoading(false);
@@ -120,18 +154,44 @@ export default function GoogleSignInScreen({ navigation }: any) {
         />
 
         {/* Password Input */}
-        <TextInput
-          placeholder="Password"
-          value={password}
-          onChangeText={(text) => {
-            setPassword(text);
-            if (error) setError('');
-          }}
-          secureTextEntry
-          editable={!loading}
-          style={styles.input}
-          placeholderTextColor={Colors.textTertiary}
-        />
+        <View style={styles.passwordContainer}>
+          <TextInput
+            placeholder="Password"
+            value={password}
+            onChangeText={(text) => {
+              setPassword(text);
+              if (error) setError('');
+            }}
+            secureTextEntry={!showPassword}
+            editable={!loading}
+            style={styles.passwordInput}
+            placeholderTextColor={Colors.textTertiary}
+          />
+          <TouchableOpacity
+            onPress={() => setShowPassword(!showPassword)}
+            style={styles.eyeIcon}
+            disabled={loading}
+          >
+            <Ionicons
+              name={showPassword ? 'eye-off-outline' : 'eye-outline'}
+              size={24}
+              color={Colors.textSecondary}
+            />
+          </TouchableOpacity>
+        </View>
+
+        {/* Forgot Password Link (only show on Sign In) */}
+        {!isSignUp && (
+          <TouchableOpacity
+            onPress={handleForgotPassword}
+            disabled={loading}
+            style={styles.forgotPasswordButton}
+          >
+            <Text style={styles.forgotPasswordText}>
+              Forgot Password?
+            </Text>
+          </TouchableOpacity>
+        )}
 
         {/* Error Message */}
         {error && (
@@ -161,6 +221,7 @@ export default function GoogleSignInScreen({ navigation }: any) {
           onPress={() => {
             setIsSignUp(!isSignUp);
             setError('');
+            setPassword('');
           }}
           disabled={loading}
           style={styles.toggleButton}
@@ -171,15 +232,6 @@ export default function GoogleSignInScreen({ navigation }: any) {
               : "Don't have an account? Sign Up"}
           </Text>
         </TouchableOpacity>
-
-        {/* Test Account Info */}
-        <View style={styles.testInfo}>
-          <Text style={styles.testInfoText}>
-            Test Account:{'\n'}
-            Email: test@circles.app{'\n'}
-            Password: test123
-          </Text>
-        </View>
       </View>
     </View>
   );
@@ -227,6 +279,36 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     marginBottom: 16,
   },
+  passwordContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  passwordInput: {
+    flex: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: Typography.fontSize.md,
+    color: Colors.textPrimary,
+  },
+  eyeIcon: {
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  forgotPasswordButton: {
+    alignSelf: 'flex-end',
+    marginBottom: 16,
+    paddingVertical: 4,
+  },
+  forgotPasswordText: {
+    fontSize: Typography.fontSize.sm,
+    color: Colors.primary,
+    fontWeight: Typography.fontWeight.medium as any,
+  },
   errorText: {
     fontSize: Typography.fontSize.sm,
     color: Colors.error,
@@ -257,19 +339,5 @@ const styles = StyleSheet.create({
     fontSize: Typography.fontSize.sm,
     color: Colors.primary,
     fontWeight: Typography.fontWeight.medium as any,
-  },
-  testInfo: {
-    marginTop: 24,
-    padding: 12,
-    backgroundColor: Colors.background,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  testInfoText: {
-    fontSize: Typography.fontSize.sm,
-    color: Colors.textSecondary,
-    textAlign: 'center',
-    lineHeight: Typography.lineHeight.normal * Typography.fontSize.sm,
   },
 });
