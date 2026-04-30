@@ -45,7 +45,7 @@ export default {
     ],
     extra: {
       eas: {
-        projectId: '7b264cec-5bda-4d35-81b6-476a157e294a',
+        projectId: 'ed6fb5d3-14a6-4d38-a076-05016c4a596c',
       },
       // Firebase Config - sourced from .env
       firebaseApiKey: process.env.FIREBASE_API_KEY,
