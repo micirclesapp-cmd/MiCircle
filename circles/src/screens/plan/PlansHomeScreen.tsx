@@ -25,11 +25,21 @@ interface PlansHomeScreenProps {
  * Shows all upcoming plans across all circles
  */
 export default function PlansHomeScreen({ navigation }: PlansHomeScreenProps) {
-  const { circles, loading: circlesLoading } = useUserCircles();
+  const { circles, loading: circlesLoading, error: circlesError } = useUserCircles();
   const circleIds = circles.map((c) => c.id);
-  const { plans, loading: plansLoading, error } = useUpcomingPlans(circleIds);
+  const { plans, loading: plansLoading, error: plansError } = useUpcomingPlans(circleIds);
 
   const [refreshing, setRefreshing] = React.useState(false);
+
+  // Log any errors for debugging
+  useEffect(() => {
+    if (circlesError) {
+      console.error('PlansHomeScreen: Error loading circles:', circlesError);
+    }
+    if (plansError) {
+      console.error('PlansHomeScreen: Error loading plans:', plansError);
+    }
+  }, [circlesError, plansError]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -38,18 +48,41 @@ export default function PlansHomeScreen({ navigation }: PlansHomeScreenProps) {
   };
 
   const handlePlanPress = (planId: string, circleId: string, planTitle: string) => {
-    navigation.navigate('PlanDetail', {
-      planId,
-      circleId,
-      planTitle,
-    });
+    try {
+      navigation.navigate('PlanDetail', {
+        planId,
+        circleId,
+        planTitle,
+      });
+    } catch (error) {
+      console.error('PlansHomeScreen: Navigation error:', error);
+    }
   };
 
+  // Show loading state
   if (circlesLoading || plansLoading) {
-    return <LoadingSpinner />;
+    return (
+      <View style={styles.container}>
+        <LoadingSpinner />
+      </View>
+    );
   }
 
-  if (error) {
+  // Show error state for circles
+  if (circlesError) {
+    return (
+      <View style={styles.container}>
+        <EmptyState
+          icon="⚠️"
+          title="Error Loading Circles"
+          message="Failed to load your circles. Please try again."
+        />
+      </View>
+    );
+  }
+
+  // Show error state for plans
+  if (plansError) {
     return (
       <View style={styles.container}>
         <EmptyState
@@ -61,6 +94,20 @@ export default function PlansHomeScreen({ navigation }: PlansHomeScreenProps) {
     );
   }
 
+  // Show empty state if no circles
+  if (circles.length === 0) {
+    return (
+      <View style={styles.container}>
+        <EmptyState
+          icon="👥"
+          title="No Circles Yet"
+          message="Create or join a circle to start making plans!"
+        />
+      </View>
+    );
+  }
+
+  // Show empty state if no plans
   if (plans.length === 0) {
     return (
       <View style={styles.container}>
@@ -83,68 +130,81 @@ export default function PlansHomeScreen({ navigation }: PlansHomeScreenProps) {
   const nextWeek = new Date(today);
   nextWeek.setDate(nextWeek.getDate() + 7);
 
-  const todaysPlans = plans.filter((plan) => {
-    const planDate = new Date(plan.date);
-    return planDate >= today && planDate < tomorrow;
-  });
+  try {
+    const todaysPlans = plans.filter((plan) => {
+      const planDate = new Date(plan.date);
+      return planDate >= today && planDate < tomorrow;
+    });
 
-  const tomorrowsPlans = plans.filter((plan) => {
-    const planDate = new Date(plan.date);
-    const dayAfterTomorrow = new Date(tomorrow);
-    dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 1);
-    return planDate >= tomorrow && planDate < dayAfterTomorrow;
-  });
+    const tomorrowsPlans = plans.filter((plan) => {
+      const planDate = new Date(plan.date);
+      const dayAfterTomorrow = new Date(tomorrow);
+      dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 1);
+      return planDate >= tomorrow && planDate < dayAfterTomorrow;
+    });
 
-  const thisWeeksPlans = plans.filter((plan) => {
-    const planDate = new Date(plan.date);
-    const dayAfterTomorrow = new Date(tomorrow);
-    dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 1);
-    return planDate >= dayAfterTomorrow && planDate < nextWeek;
-  });
+    const thisWeeksPlans = plans.filter((plan) => {
+      const planDate = new Date(plan.date);
+      const dayAfterTomorrow = new Date(tomorrow);
+      dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 1);
+      return planDate >= dayAfterTomorrow && planDate < nextWeek;
+    });
 
-  const laterPlans = plans.filter((plan) => {
-    const planDate = new Date(plan.date);
-    return planDate >= nextWeek;
-  });
+    const laterPlans = plans.filter((plan) => {
+      const planDate = new Date(plan.date);
+      return planDate >= nextWeek;
+    });
 
-  const sections = [
-    { title: 'Today', data: todaysPlans },
-    { title: 'Tomorrow', data: tomorrowsPlans },
-    { title: 'This Week', data: thisWeeksPlans },
-    { title: 'Later', data: laterPlans },
-  ].filter((section) => section.data.length > 0);
+    const sections = [
+      { title: 'Today', data: todaysPlans },
+      { title: 'Tomorrow', data: tomorrowsPlans },
+      { title: 'This Week', data: thisWeeksPlans },
+      { title: 'Later', data: laterPlans },
+    ].filter((section) => section.data.length > 0);
 
-  return (
-    <View style={styles.container}>
-      <FlatList
-        data={sections}
-        keyExtractor={(item) => item.title}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
-        }
-        renderItem={({ item: section }) => (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>{section.title}</Text>
-            {section.data.map((plan) => (
-              <PlanCard
-                key={plan.id}
-                plan={plan}
-                onPress={() => handlePlanPress(plan.id, plan.circleId, plan.title)}
-              />
-            ))}
-          </View>
-        )}
-        ListHeaderComponent={
-          <View style={styles.header}>
-            <Text style={styles.headerTitle}>Upcoming Plans</Text>
-            <Text style={styles.headerSubtitle}>
-              {plans.length} {plans.length === 1 ? 'plan' : 'plans'}
-            </Text>
-          </View>
-        }
-      />
-    </View>
-  );
+    return (
+      <View style={styles.container}>
+        <FlatList
+          data={sections}
+          keyExtractor={(item) => item.title}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+          }
+          renderItem={({ item: section }) => (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>{section.title}</Text>
+              {section.data.map((plan) => (
+                <PlanCard
+                  key={plan.id}
+                  plan={plan}
+                  onPress={() => handlePlanPress(plan.id, plan.circleId, plan.title)}
+                />
+              ))}
+            </View>
+          )}
+          ListHeaderComponent={
+            <View style={styles.header}>
+              <Text style={styles.headerTitle}>Upcoming Plans</Text>
+              <Text style={styles.headerSubtitle}>
+                {plans.length} {plans.length === 1 ? 'plan' : 'plans'}
+              </Text>
+            </View>
+          }
+        />
+      </View>
+    );
+  } catch (error) {
+    console.error('PlansHomeScreen: Render error:', error);
+    return (
+      <View style={styles.container}>
+        <EmptyState
+          icon="⚠️"
+          title="Something Went Wrong"
+          message="Unable to display plans. Please try again."
+        />
+      </View>
+    );
+  }
 }
 
 const styles = StyleSheet.create({
