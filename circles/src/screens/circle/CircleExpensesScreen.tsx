@@ -9,6 +9,8 @@ import {
   Linking,
   Modal,
   ScrollView,
+  Share,
+  ActivityIndicator,
 } from 'react-native';
 import {
   collection,
@@ -17,6 +19,8 @@ import {
   onSnapshot,
   doc,
   updateDoc,
+  getDoc,
+  addDoc,
 } from 'firebase/firestore';
 import { firestore, auth } from '../../services/firebase';
 import { Colors } from '../../constants/colors';
@@ -144,30 +148,44 @@ const BalanceRow: React.FC<{
 const SettleUpModal: React.FC<{
   visible: boolean;
   balance: Balance | null;
+  upiId: string | null;
+  isLoadingUpi: boolean;
   onClose: () => void;
   onConfirm: () => void;
-}> = ({ visible, balance, onClose, onConfirm }) => {
+}> = ({ visible, balance, upiId, isLoadingUpi, onClose, onConfirm }) => {
   if (!balance) return null;
 
   const amount = Math.abs(balance.amount);
 
-  const handlePaymentApp = (app: 'gpay' | 'phonepe' | 'paytm') => {
-    // Note: These are example deep link formats
-    // Actual implementation would need proper UPI IDs and formatting
+  const handlePaymentApp = async (app: 'gpay' | 'phonepe' | 'paytm') => {
+    if (!upiId) {
+      Share.share({
+        message: `Hi ${balance.name}, I owe you ₹${amount} for our Circle. I don't see your UPI ID, please share it so I can settle up!`,
+      });
+      return;
+    }
+
+    const pa = encodeURIComponent(upiId);
+    const pn = encodeURIComponent(balance.name);
 
     let url = '';
 
     if (app === 'gpay') {
-      url = `intent://pay?pa=&am=${amount}&cu=INR&tn=Circles#Intent;scheme=upi;package=com.google.android.apps.nbu.paisa.user;end`;
+      url = `intent://pay?pa=${pa}&pn=${pn}&am=${amount}&cu=INR&tn=Circles#Intent;scheme=upi;package=com.google.android.apps.nbu.paisa.user;end`;
     } else if (app === 'phonepe') {
-      url = `phonepe://pay?pa=&am=${amount}&cu=INR&tn=Circles`;
+      url = `phonepe://pay?pa=${pa}&pn=${pn}&am=${amount}&cu=INR&tn=Circles`;
     } else if (app === 'paytm') {
-      url = `paytmmp://pay?pa=&am=${amount}&cu=INR&tn=Circles`;
+      url = `paytmmp://pay?pa=${pa}&pn=${pn}&am=${amount}&cu=INR&tn=Circles`;
     }
 
-    Linking.openURL(url).catch(() => {
-      Alert.alert('Error', `${app} app not installed`);
-    });
+    try {
+      await Linking.openURL(url);
+    } catch (error) {
+      Alert.alert('App Not Installed', `${app.toUpperCase()} is not installed on this device.`, [
+        { text: 'Share Request', onPress: () => Share.share({ message: `Hi ${balance.name}, I owe you ₹${amount} for our Circle. Please share a payment link or UPI ID!` }) },
+        { text: 'Cancel', style: 'cancel' }
+      ]);
+    }
   };
 
   return (
@@ -179,7 +197,11 @@ const SettleUpModal: React.FC<{
 
           <Text style={styles.settleModalLabel}>Choose payment app:</Text>
 
-          {/* Payment app buttons */}
+          {isLoadingUpi ? (
+            <ActivityIndicator size="large" color={Colors.primary} style={{ marginVertical: 20 }} />
+          ) : (
+            <>
+              {/* Payment app buttons */}
           <TouchableOpacity
             style={styles.paymentButton}
             onPress={() => handlePaymentApp('gpay')}
@@ -194,12 +216,13 @@ const SettleUpModal: React.FC<{
             <Text style={styles.paymentButtonText}>📱 PhonePe</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.paymentButton}
-            onPress={() => handlePaymentApp('paytm')}
-          >
-            <Text style={styles.paymentButtonText}>💰 Paytm</Text>
-          </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.paymentButton}
+              onPress={() => handlePaymentApp('paytm')}
+            >
+              <Text style={styles.paymentButtonText}>💰 Paytm</Text>
+            </TouchableOpacity>
+          </>}
 
           {/* Confirm payment button */}
           <TouchableOpacity style={styles.confirmButton} onPress={onConfirm}>
@@ -233,6 +256,8 @@ export default function CircleExpensesScreen({
   const [totalBalance, setTotalBalance] = useState(0);
   const [settleModalVisible, setSettleModalVisible] = useState(false);
   const [selectedBalance, setSelectedBalance] = useState<Balance | null>(null);
+  const [selectedBalanceUpiId, setSelectedBalanceUpiId] = useState<string | null>(null);
+  const [isLoadingUpi, setIsLoadingUpi] = useState(false);
 
   // Load expenses
   useEffect(() => {
@@ -303,25 +328,50 @@ export default function CircleExpensesScreen({
     setTotalBalance(total);
   };
 
-  const handleSettleUp = (balance: Balance) => {
+  const handleSettleUp = async (balance: Balance) => {
     setSelectedBalance(balance);
     setSettleModalVisible(true);
+    setIsLoadingUpi(true);
+    setSelectedBalanceUpiId(null);
+    try {
+      const userDoc = await getDoc(doc(firestore, 'users', balance.uid));
+      if (userDoc.exists() && userDoc.data()?.upiId) {
+        setSelectedBalanceUpiId(userDoc.data().upiId);
+      }
+    } catch (e) {
+      console.error('Error fetching UPI ID:', e);
+    } finally {
+      setIsLoadingUpi(false);
+    }
   };
 
   const handleConfirmPayment = async () => {
-    if (!selectedBalance) return;
+    if (!selectedBalance || !currentUid) return;
 
     try {
-      // In a real app, this would update the balances collection
-      // For now, we'll just show a success message
+      const userDoc = await getDoc(doc(firestore, 'users', currentUid));
+      const userName = userDoc.data()?.name || userDoc.data()?.displayName || 'Unknown';
+
+      // Settlement is an expense where I pay, and they are split 100%
+      await addDoc(collection(firestore, `circles/${circleId}/expenses`), {
+        amount: Math.abs(selectedBalance.amount),
+        description: `Settled up with ${selectedBalance.name}`,
+        paidByUid: currentUid,
+        paidByName: userName,
+        splits: [
+          {
+            uid: selectedBalance.uid,
+            name: selectedBalance.name,
+            amount: Math.abs(selectedBalance.amount),
+          }
+        ],
+        planId: null,
+        createdAt: Date.now(),
+      });
 
       Alert.alert('Success', `Payment to ${selectedBalance.name} recorded`);
       setSettleModalVisible(false);
       setSelectedBalance(null);
-
-      // TODO: Update Firestore balances
-      // This could be done by creating a "settlement" document
-      // or by recalculating balances after marking expenses as settled
     } catch (error) {
       console.error('Error confirming payment:', error);
       Alert.alert('Error', 'Failed to record payment');
@@ -404,6 +454,8 @@ export default function CircleExpensesScreen({
       <SettleUpModal
         visible={settleModalVisible}
         balance={selectedBalance}
+        upiId={selectedBalanceUpiId}
+        isLoadingUpi={isLoadingUpi}
         onClose={() => {
           setSettleModalVisible(false);
           setSelectedBalance(null);

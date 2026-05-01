@@ -6,6 +6,7 @@ export interface User {
   joinYear: number;
   createdAt: number;
   subscription?: 'free' | 'plus';
+  upiId?: string;
 }
 
 // NOTE: phoneNumber must NEVER be in this interface or any Firestore document

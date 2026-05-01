@@ -7,6 +7,7 @@ import {
   ScrollView,
   Switch,
   ActivityIndicator,
+  TextInput,
 } from 'react-native';
 import { signOut } from 'firebase/auth';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
@@ -29,6 +30,7 @@ export default function ProfileScreen() {
     messages: true,
     planReminders: true,
   });
+  const [upiId, setUpiId] = useState<string>('');
   const [savingPref, setSavingPref] = useState<string | null>(null);
 
   // Load notification preferences from Firestore on mount
@@ -43,6 +45,10 @@ export default function ProfileScreen() {
             messages: prefs.messages !== false,
             planReminders: prefs.planReminders !== false,
           });
+        }
+        const userUpiId = userDoc.data()?.upiId;
+        if (userUpiId) {
+          setUpiId(userUpiId);
         }
       } catch (error) {
         console.error('Error loading notification prefs:', error);
@@ -64,6 +70,20 @@ export default function ProfileScreen() {
       console.error(`Error saving ${key} pref:`, error);
       // Revert on failure
       setNotifPrefs((prev) => ({ ...prev, [key]: !value }));
+    } finally {
+      setSavingPref(null);
+    }
+  };
+
+  const handleSaveUpiId = async () => {
+    if (!user) return;
+    setSavingPref('upiId');
+    try {
+      await updateDoc(doc(firestore, 'users', user.uid), {
+        upiId: upiId.trim(),
+      });
+    } catch (error) {
+      console.error('Error saving UPI ID:', error);
     } finally {
       setSavingPref(null);
     }
@@ -107,6 +127,38 @@ export default function ProfileScreen() {
           <Text style={styles.menuItemText}>Privacy</Text>
           <Text style={styles.menuItemArrow}>→</Text>
         </TouchableOpacity>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Payment Details</Text>
+        <View style={styles.inputContainer}>
+          <Text style={styles.inputLabel}>UPI ID</Text>
+          <View style={styles.inputRow}>
+            <TextInput
+              style={styles.textInput}
+              placeholder="e.g., name@okicici"
+              placeholderTextColor={Colors.textTertiary}
+              value={upiId}
+              onChangeText={setUpiId}
+              autoCapitalize="none"
+              keyboardType="email-address"
+            />
+            <TouchableOpacity
+              style={styles.saveButton}
+              onPress={handleSaveUpiId}
+              disabled={savingPref === 'upiId'}
+            >
+              {savingPref === 'upiId' ? (
+                <ActivityIndicator size="small" color={Colors.surface} />
+              ) : (
+                <Text style={styles.saveButtonText}>Save</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.toggleSubtext}>
+            Required for others to settle up with you automatically.
+          </Text>
+        </View>
       </View>
 
       {/* ── Notification Settings ── */}
@@ -252,6 +304,46 @@ const styles = StyleSheet.create({
   menuItemArrow: {
     fontSize: Typography.fontSize.lg,
     color: Colors.textTertiary,
+  },
+  inputContainer: {
+    backgroundColor: Colors.surface,
+    padding: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  inputLabel: {
+    fontSize: Typography.fontSize.sm,
+    fontWeight: Typography.fontWeight.semibold as any,
+    color: Colors.textSecondary,
+    marginBottom: 8,
+  },
+  inputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  textInput: {
+    flex: 1,
+    backgroundColor: Colors.surfaceAlt,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: Typography.fontSize.md,
+    color: Colors.textPrimary,
+  },
+  saveButton: {
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  saveButtonText: {
+    color: Colors.surface,
+    fontSize: Typography.fontSize.sm,
+    fontWeight: Typography.fontWeight.semibold as any,
   },
   toggleItem: {
     flexDirection: 'row',

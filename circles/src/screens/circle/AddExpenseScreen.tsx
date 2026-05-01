@@ -128,13 +128,26 @@ export default function AddExpenseScreen({
     if (isNaN(amountNum) || selectedMembers.length === 0) return [];
 
     if (splitType === 'equal') {
-      const perPerson = amountNum / selectedMembers.length;
+      const perPerson = Math.round((amountNum / selectedMembers.length) * 100) / 100;
+      let totalCalculated = perPerson * selectedMembers.length;
+      let remainder = Math.round((amountNum - totalCalculated) * 100) / 100;
+
       return selectedMembers.map((uid) => {
         const member = members.find((m) => m.uid === uid);
+        let finalAmount = perPerson;
+        
+        // Add the remainder to the payer's split, or the first person if payer isn't in split
+        if (remainder !== 0) {
+          if (uid === paidBy || (!selectedMembers.includes(paidBy) && uid === selectedMembers[0])) {
+            finalAmount = Math.round((finalAmount + remainder) * 100) / 100;
+            remainder = 0; // Only apply once
+          }
+        }
+
         return {
           uid,
           name: member?.name || 'Unknown',
-          amount: Math.round(perPerson * 100) / 100,
+          amount: finalAmount,
         };
       });
     } else {
