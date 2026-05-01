@@ -222,7 +222,7 @@ const SettleUpModal: React.FC<{
             >
               <Text style={styles.paymentButtonText}>💰 Paytm</Text>
             </TouchableOpacity>
-          </>}
+          </>)}
 
           {/* Confirm payment button */}
           <TouchableOpacity style={styles.confirmButton} onPress={onConfirm}>
