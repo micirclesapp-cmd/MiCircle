@@ -29,6 +29,7 @@ type CircleStackParamList = {
   CirclePlannerScreen: { circleId: string };
   CreatePlanScreen: { circleId: string };
   PlanDetailScreen: { circleId: string; planId: string };
+  AvailabilityCheckScreen: { circleId: string; mode: 'create' };
 };
 
 type CirclePlannerScreenNavigationProp = StackNavigationProp<
@@ -166,6 +167,16 @@ export default function CirclePlannerScreen() {
         renderItem={() => null}
         ListHeaderComponent={
           <>
+            {/* Top Action Bar */}
+            <View style={styles.topActions}>
+              <TouchableOpacity
+                style={styles.actionButton}
+                onPress={() => navigation.navigate('AvailabilityCheckScreen', { circleId, mode: 'create' })}
+              >
+                <Text style={styles.actionButtonText}>📅 Check Availability</Text>
+              </TouchableOpacity>
+            </View>
+
             {/* Upcoming Plans Section */}
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Upcoming</Text>
@@ -234,6 +245,23 @@ const styles = StyleSheet.create({
   },
   listContent: {
     paddingBottom: 100,
+  },
+  topActions: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
+  },
+  actionButton: {
+    backgroundColor: Colors.surface,
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  actionButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: Colors.primary,
   },
   section: {
     marginTop: 24,

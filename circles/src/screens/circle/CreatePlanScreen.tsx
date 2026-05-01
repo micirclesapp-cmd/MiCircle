@@ -25,7 +25,7 @@ import { Colors } from '../../constants/colors';
 import type { PlanType } from '../../types/plan.types';
 
 type CircleStackParamList = {
-  CreatePlanScreen: { circleId: string };
+  CreatePlanScreen: { circleId: string; prefilledDate?: string; prefilledRSVPs?: string[] };
   CirclePlannerScreen: { circleId: string };
 };
 
@@ -65,11 +65,11 @@ interface PlanDetails {
 export const CreatePlanScreen: React.FC = () => {
   const navigation = useNavigation<CreatePlanScreenNavigationProp>();
   const route = useRoute<CreatePlanScreenRouteProp>();
-  const { circleId } = route.params;
+  const { circleId, prefilledDate, prefilledRSVPs } = route.params;
 
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [selectedType, setSelectedType] = useState<PlanType | null>(null);
-  const [date, setDate] = useState('');
+  const [date, setDate] = useState(prefilledDate ? prefilledDate.split('T')[0] : '');
   const [time, setTime] = useState('');
   const [details, setDetails] = useState<PlanDetails>({});
   const [publishing, setPublishing] = useState(false);
@@ -151,6 +151,14 @@ export const CreatePlanScreen: React.FC = () => {
         planLocation = details.location || '';
       }
 
+      // Prepare initial RSVPs if any
+      const initialRsvps: Record<string, string> = {};
+      if (prefilledRSVPs && prefilledRSVPs.length > 0) {
+        prefilledRSVPs.forEach((uid) => {
+          initialRsvps[uid] = 'going';
+        });
+      }
+
       // 1. Write to Firestore
       const plansRef = collection(firestore, 'circles', circleId, 'plans');
       const planDoc = await addDoc(plansRef, {
@@ -163,7 +171,7 @@ export const CreatePlanScreen: React.FC = () => {
         details,
         creatorUid: currentUser.uid,
         creatorName: currentUser.displayName || 'Unknown',
-        rsvps: {},
+        rsvps: initialRsvps,
         createdAt: Date.now(),
         isArchived: false,
       });

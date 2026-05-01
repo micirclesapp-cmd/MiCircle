@@ -28,5 +28,11 @@ export {
   cleanupOldReports,
 } from './moderationFunctions';
 
+// Availability functions
+export {
+  onAvailabilityCheckCreated,
+  cleanupAvailabilityChecks,
+} from './availabilityFunctions';
+
 // Add more function exports here as needed
 // export { functionName } from './functionFile';

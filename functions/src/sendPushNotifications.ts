@@ -85,7 +85,7 @@ const deleteStaleToken = async (uid: string, docId: string): Promise<void> => {
  *  - Stale tokens: deletes DeviceNotRegistered / InvalidCredentials tokens
  *  - Notification preferences: skips users who opted out of the given type
  */
-const sendPushNotifications = async (
+export const sendPushNotifications = async (
   userIds: string[],
   title: string,
   body: string,
