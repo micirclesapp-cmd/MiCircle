@@ -198,8 +198,8 @@ export const CreateOpenCircleScreen: React.FC = () => {
       if (creationTime) {
         const ageInMs = Date.now() - new Date(creationTime).getTime();
         if (ageInMs < 24 * 60 * 60 * 1000) {
-          // For MVP, just alert. In production we'd call reauthenticateWithCredential.
-          Alert.alert('Security Check', 'As a new user, please verify your email before posting.', [{ text: 'OK' }]);
+          // For MVP, just alert. In production we'd prompt Google re-authentication.
+          Alert.alert('Security Check', 'As a new user, please verify your account before posting.', [{ text: 'OK' }]);
           setPublishing(false);
           return;
         }

@@ -203,33 +203,6 @@ export const trackMessageSent = async (
 };
 
 /**
- * Track video call started
- */
-export const trackVideoCallStarted = async (
-  circleId: string,
-  participantCount: number
-): Promise<void> => {
-  try {
-    const userId = auth.currentUser?.uid;
-    if (!userId) return;
-
-    await setDoc(
-      doc(firestore, `analytics/videoCalls/${circleId}_${Date.now()}`),
-      {
-        circleId,
-        userId,
-        participantCount,
-        timestamp: serverTimestamp(),
-      }
-    );
-
-    console.log('Video call tracked:', circleId);
-  } catch (error) {
-    console.error('Error tracking video call:', error);
-  }
-};
-
-/**
  * Track subscription purchase
  */
 export const trackSubscriptionPurchase = async (

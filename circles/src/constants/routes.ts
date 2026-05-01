@@ -1,8 +1,6 @@
 export const Routes = {
   // Auth Stack
   SPLASH: 'Splash',
-  PHONE_ENTRY: 'PhoneEntry',
-  OTP: 'OTP',
   DISPLAY_NAME: 'DisplayName',
   AVATAR: 'Avatar',
   BIO: 'Bio',
@@ -30,7 +28,6 @@ export const Routes = {
   CIRCLE_SETTINGS: 'CircleSettings',
   CREATE_CIRCLE: 'CreateCircle',
   JOIN_CIRCLE: 'JoinCircle',
-  VIDEO_CALL: 'VideoCall',
   AVAILABILITY_CHECK: 'AvailabilityCheck',
   ADD_EXPENSE: 'AddExpense',
   CREATE_POLL: 'CreatePoll',

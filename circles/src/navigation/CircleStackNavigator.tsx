@@ -8,7 +8,6 @@ import CircleMemoryLaneScreen from '../screens/circle/CircleMemoryLaneScreen';
 import CircleExpensesScreen from '../screens/circle/CircleExpensesScreen';
 import CircleMembersScreen from '../screens/circle/CircleMembersScreen';
 import CircleSettingsScreen from '../screens/circle/CircleSettingsScreen';
-import VideoCallScreen from '../screens/circle/VideoCallScreen';
 import AvailabilityCheckScreen from '../screens/circle/AvailabilityCheckScreen';
 import AddExpenseScreen from '../screens/circle/AddExpenseScreen';
 import CreatePlanScreen from '../screens/circle/CreatePlanScreen';
@@ -68,14 +67,6 @@ export default function CircleStackNavigator() {
         name={Routes.CIRCLE_SETTINGS}
         component={CircleSettingsScreen}
         options={{ title: 'Settings' }}
-      />
-      <Stack.Screen
-        name={Routes.VIDEO_CALL}
-        component={VideoCallScreen}
-        options={{ 
-          title: 'Video Call',
-          headerShown: false, // Full screen video call
-        }}
       />
       <Stack.Screen
         name={Routes.AVAILABILITY_CHECK}
