@@ -265,7 +265,7 @@ export default function CircleMemoryLaneScreen({
 
   // Load photos
   useEffect(() => {
-    const photosRef = collection(firestore, `circles/${circleId}/photos`);
+    const photosRef = collection(firestore, `circles/${circleId}/memories`);
     const q = query(photosRef, orderBy('uploadedAt', 'desc'));
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -363,6 +363,11 @@ export default function CircleMemoryLaneScreen({
   };
 
   const handleTakePhoto = async () => {
+    if (photos.length >= 100) {
+      Alert.alert('Limit Reached', 'Free circles are limited to 100 photos. Upgrade to Circles+ to upload more!');
+      return;
+    }
+
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') {
       Alert.alert('Permission Denied', 'Camera permission is required');
@@ -380,16 +385,24 @@ export default function CircleMemoryLaneScreen({
   };
 
   const handleChooseFromLibrary = async () => {
+    if (photos.length >= 100) {
+      Alert.alert('Limit Reached', 'Free circles are limited to 100 photos. Upgrade to Circles+ to upload more!');
+      return;
+    }
+
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
       Alert.alert('Permission Denied', 'Photo library permission is required');
       return;
     }
 
+    const remainingSlots = 100 - photos.length;
+    const maxSelection = Math.min(10, remainingSlots);
+
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsMultipleSelection: true,
-      selectionLimit: 10,
+      selectionLimit: maxSelection,
       quality: 0.8,
     });
 
@@ -415,7 +428,7 @@ export default function CircleMemoryLaneScreen({
 
       // Upload to Firebase Storage
       const photoId = `photo_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      const photoRef = storageRef(storage, `circles/${circleId}/photos/${photoId}.jpg`);
+      const photoRef = storageRef(storage, `circles/${circleId}/memories/${photoId}.jpg`);
 
       const response = await fetch(manipResult.uri);
       const blob = await response.blob();
@@ -445,7 +458,7 @@ export default function CircleMemoryLaneScreen({
       }
 
       // Write metadata to Firestore
-      await addDoc(collection(firestore, `circles/${circleId}/photos`), {
+      await addDoc(collection(firestore, `circles/${circleId}/memories`), {
         storageUrl: downloadUrl,
         thumbnailUrl: downloadUrl, // Could generate actual thumbnail
         uploaderUid: currentUid,
@@ -475,7 +488,7 @@ export default function CircleMemoryLaneScreen({
     if (!currentUid) return;
 
     try {
-      const photoRef = doc(firestore, `circles/${circleId}/photos/${photoId}`);
+      const photoRef = doc(firestore, `circles/${circleId}/memories/${photoId}`);
       const photo = photos.find((p) => p.id === photoId);
 
       if (!photo) return;
@@ -502,7 +515,7 @@ export default function CircleMemoryLaneScreen({
 
   const handleAddCaption = async (photoId: string, caption: string) => {
     try {
-      const photoRef = doc(firestore, `circles/${circleId}/photos/${photoId}`);
+      const photoRef = doc(firestore, `circles/${circleId}/memories/${photoId}`);
       await updateDoc(photoRef, { caption });
     } catch (error) {
       console.error('Error adding caption:', error);
