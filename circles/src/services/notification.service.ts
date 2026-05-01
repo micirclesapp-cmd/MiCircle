@@ -1,12 +1,30 @@
 import * as Notifications from 'expo-notifications';
-import * as Device from 'expo-device';
 import { Platform } from 'react-native';
-import { collection, doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import {
+  collection,
+  doc,
+  setDoc,
+  deleteDoc,
+  getDocs,
+  query,
+  where,
+  serverTimestamp,
+} from 'firebase/firestore';
 import { firestore, auth } from './firebase';
 import { NavigationContainerRef } from '@react-navigation/native';
+import Constants from 'expo-constants';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface NotificationData {
-  type: 'new_member' | 'new_plan' | 'rsvp_nudge' | 'plan_reminder' | 'transit_match' | 'archive_prompt';
+  type:
+    | 'new_message'
+    | 'new_member'
+    | 'new_plan'
+    | 'rsvp_nudge'
+    | 'plan_reminder'
+    | 'transit_match'
+    | 'archive_prompt';
   circleId?: string;
   planId?: string;
   cardId?: string;
@@ -14,6 +32,7 @@ export interface NotificationData {
   planTitle?: string;
   planDate?: string;
   routeId?: string;
+  senderName?: string;
 }
 
 export interface InAppNotification {
@@ -24,21 +43,25 @@ export interface InAppNotification {
   data: NotificationData;
 }
 
-// Callback for showing in-app notifications
+// ─── Module-level state ───────────────────────────────────────────────────────
+
+// Callback for showing in-app notifications (set by NotificationProvider/useInAppNotifications)
 let inAppNotificationCallback: ((notification: InAppNotification) => void) | null = null;
 
 // Navigation reference for deep linking
 let navigationRef: NavigationContainerRef<any> | null = null;
 
+// ─── Setters ──────────────────────────────────────────────────────────────────
+
 /**
- * Set the navigation reference for deep linking
+ * Set the navigation reference for deep linking from background/killed state.
  */
 export const setNavigationRef = (ref: NavigationContainerRef<any>) => {
   navigationRef = ref;
 };
 
 /**
- * Set the callback for showing in-app notifications
+ * Set the callback for showing in-app notifications (foreground state).
  */
 export const setInAppNotificationCallback = (
   callback: (notification: InAppNotification) => void
@@ -46,16 +69,22 @@ export const setInAppNotificationCallback = (
   inAppNotificationCallback = callback;
 };
 
+// ─── Setup ────────────────────────────────────────────────────────────────────
+
 /**
- * Configure notification handlers
- * Call this once when the app loads
+ * Configure the single canonical notification handler.
+ * - When foreground: suppress OS alert, show our custom in-app banner instead.
+ * - When background/killed: tapping navigates via addNotificationResponseReceivedListener.
+ *
+ * Call this ONCE when the app loads (in RootNavigator or App).
+ * Do NOT call Notifications.setNotificationHandler anywhere else.
  */
 export const configureNotificationHandlers = () => {
-  // Set notification handler for when app is in foreground
   Notifications.setNotificationHandler({
     handleNotification: async (notification) => {
-      // Show in-app banner instead of OS notification when in foreground
-      const data = notification.request.content.data as NotificationData;
+      const data = notification.request.content.data as unknown as NotificationData;
+
+      // Show custom in-app banner instead of OS notification
       if (inAppNotificationCallback) {
         const inAppNotif = createInAppNotification(
           notification.request.content.title || '',
@@ -66,40 +95,37 @@ export const configureNotificationHandlers = () => {
       }
 
       return {
-        shouldShowAlert: false, // Don't show OS notification in foreground
+        shouldShowAlert: false,   // suppress OS banner in foreground
+        shouldShowBanner: false,  // required in expo-notifications 0.32+
+        shouldShowList: true,     // still add to notification centre list
         shouldPlaySound: true,
         shouldSetBadge: true,
       };
     },
   });
 
-  // Handle notification when user taps on it (background/killed state)
+  // User tapped notification from background / notification tray
   Notifications.addNotificationResponseReceivedListener((response) => {
-    const data = response.notification.request.content.data as NotificationData;
+    const data = response.notification.request.content.data as unknown as NotificationData;
     handleNotificationNavigation(data);
   });
 
-  // Check if app was opened from a notification
+  // App was cold-launched from a notification tap
   Notifications.getLastNotificationResponseAsync().then((response) => {
     if (response) {
-      const data = response.notification.request.content.data as NotificationData;
+      const data = response.notification.request.content.data as unknown as NotificationData;
       handleNotificationNavigation(data);
     }
   });
 };
 
 /**
- * Request notification permissions and register push token
- * Call this after user authentication
+ * Request notification permissions and register the Expo push token.
+ * Call this after the user is authenticated.
  */
 export const setupPushNotifications = async (): Promise<boolean> => {
   try {
-    if (!Device.isDevice) {
-      console.log('Push notifications only work on physical devices');
-      return false;
-    }
 
-    // Request permissions
     const { status: existingStatus } = await Notifications.getPermissionsAsync();
     let finalStatus = existingStatus;
 
@@ -113,27 +139,28 @@ export const setupPushNotifications = async (): Promise<boolean> => {
       return false;
     }
 
-    // Get Expo Push Token
-    const tokenData = await Notifications.getExpoPushTokenAsync({
-      projectId: 'your-expo-project-id', // Replace with your Expo project ID
-    });
-    const token = tokenData.data;
-
-    // Save token to Firestore
-    const currentUser = auth.currentUser;
-    if (currentUser) {
-      await savePushToken(currentUser.uid, token);
-      console.log('Push token saved:', token);
-    }
-
-    // Configure notification channel for Android
+    // Configure Android notification channel
     if (Platform.OS === 'android') {
       await Notifications.setNotificationChannelAsync('default', {
-        name: 'default',
+        name: 'Circles',
         importance: Notifications.AndroidImportance.MAX,
         vibrationPattern: [0, 250, 250, 250],
         lightColor: '#1A6B5A',
+        showBadge: true,
       });
+    }
+
+    // Get Expo push token using EAS project ID
+    const projectId =
+      Constants.expoConfig?.extra?.eas?.projectId ?? 'ed6fb5d3-14a6-4d38-a076-05016c4a596c';
+
+    const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
+    const token = tokenData.data;
+
+    const currentUser = auth.currentUser;
+    if (currentUser) {
+      await savePushToken(currentUser.uid, token);
+      console.log('Push token registered:', token.slice(0, 20) + '…');
     }
 
     return true;
@@ -143,13 +170,17 @@ export const setupPushNotifications = async (): Promise<boolean> => {
   }
 };
 
+// ─── Token Management ─────────────────────────────────────────────────────────
+
 /**
- * Save push token to Firestore
+ * Save push token to Firestore pushTokens subcollection.
+ * Uses the token value itself as the doc ID to prevent duplicates.
  */
 const savePushToken = async (uid: string, token: string): Promise<void> => {
   try {
-    const tokenId = `${Platform.OS}_${Date.now()}`;
-    const tokenRef = doc(firestore, 'users', uid, 'pushTokens', tokenId);
+    // Use a safe doc ID derived from the token (strip leading "ExponentPushToken[" prefix)
+    const tokenDocId = token.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const tokenRef = doc(firestore, 'users', uid, 'pushTokens', tokenDocId);
 
     await setDoc(tokenRef, {
       token,
@@ -163,56 +194,48 @@ const savePushToken = async (uid: string, token: string): Promise<void> => {
 };
 
 /**
- * Create in-app notification object from notification data
+ * Remove the current device's push token from Firestore.
+ * Call this on sign-out to stop notifications to a logged-out device.
  */
-const createInAppNotification = (
-  title: string,
-  message: string,
-  data: NotificationData
-): InAppNotification => {
-  let icon = '🔔';
+export const removePushToken = async (uid: string): Promise<void> => {
+  try {
+    const projectId =
+      Constants.expoConfig?.extra?.eas?.projectId ?? 'ed6fb5d3-14a6-4d38-a076-05016c4a596c';
 
-  switch (data.type) {
-    case 'new_member':
-      icon = '👋';
-      break;
-    case 'new_plan':
-      icon = '📅';
-      break;
-    case 'rsvp_nudge':
-      icon = '⏰';
-      break;
-    case 'plan_reminder':
-      icon = '🔔';
-      break;
-    case 'transit_match':
-      icon = '🚂';
-      break;
-    case 'archive_prompt':
-      icon = '✈️';
-      break;
+    const { status } = await Notifications.getPermissionsAsync();
+    if (status !== 'granted') return;
+
+    const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
+    const token = tokenData.data;
+    const tokenDocId = token.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+    await deleteDoc(doc(firestore, 'users', uid, 'pushTokens', tokenDocId));
+    console.log('Push token removed on logout');
+  } catch (error) {
+    console.error('Error removing push token:', error);
   }
-
-  return {
-    id: `${Date.now()}_${Math.random()}`,
-    icon,
-    title,
-    message,
-    data,
-  };
 };
 
+// ─── Navigation ───────────────────────────────────────────────────────────────
+
 /**
- * Handle navigation based on notification type
+ * Navigate to the correct screen based on notification type.
+ * Exported so hooks can use it directly if needed.
  */
-const handleNotificationNavigation = (data: NotificationData) => {
+export const handleNotificationNavigation = (data: NotificationData) => {
   if (!navigationRef) {
-    console.warn('Navigation ref not set');
+    console.warn('Navigation ref not set — cannot deep-link from notification');
     return;
   }
 
   try {
     switch (data.type) {
+      case 'new_message':
+        if (data.circleId) {
+          navigationRef.navigate('CircleChatScreen', { circleId: data.circleId });
+        }
+        break;
+
       case 'new_member':
         if (data.circleId) {
           navigationRef.navigate('CircleScreen', { circleId: data.circleId });
@@ -227,33 +250,62 @@ const handleNotificationNavigation = (data: NotificationData) => {
             circleId: data.circleId,
             planId: data.planId,
           });
+        } else if (data.circleId) {
+          navigationRef.navigate('CirclePlannerScreen', { circleId: data.circleId });
         }
         break;
 
       case 'transit_match':
         if (data.cardId) {
-          // Navigate to FeedScreen and highlight the card
-          navigationRef.navigate('FeedScreen', {
-            highlightCardId: data.cardId,
-          });
+          navigationRef.navigate('FeedScreen', { highlightCardId: data.cardId });
         }
         break;
 
       case 'archive_prompt':
-        // This is handled by ArchivePromptHandler component
-        // No navigation needed, modal will show automatically
+        // Handled by ArchivePromptHandler component — no navigation needed
         break;
 
       default:
-        console.warn('Unknown notification type:', data.type);
+        console.warn('Unknown notification type for deep-link:', (data as any).type);
     }
   } catch (error) {
-    console.error('Error handling notification navigation:', error);
+    console.error('Error during notification navigation:', error);
   }
 };
 
+// ─── In-App Notification ──────────────────────────────────────────────────────
+
 /**
- * Send a local notification (for testing)
+ * Build an InAppNotification object from raw push content.
+ */
+const createInAppNotification = (
+  title: string,
+  message: string,
+  data: NotificationData
+): InAppNotification => {
+  const iconMap: Record<NotificationData['type'], string> = {
+    new_message: '💬',
+    new_member: '👋',
+    new_plan: '📅',
+    rsvp_nudge: '⏰',
+    plan_reminder: '🔔',
+    transit_match: '🚂',
+    archive_prompt: '✈️',
+  };
+
+  return {
+    id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+    icon: iconMap[data.type] ?? '🔔',
+    title,
+    message,
+    data,
+  };
+};
+
+// ─── Utilities ────────────────────────────────────────────────────────────────
+
+/**
+ * Send a local notification immediately (useful for testing).
  */
 export const sendLocalNotification = async (
   title: string,
@@ -261,104 +313,50 @@ export const sendLocalNotification = async (
   data: NotificationData
 ): Promise<void> => {
   await Notifications.scheduleNotificationAsync({
-    content: {
-      title,
-      body,
-      data: data as any,
-      sound: true,
-    },
-    trigger: null, // Send immediately
+    content: { title, body, data: data as any, sound: true },
+    trigger: null,
   });
 };
 
-/**
- * Cancel all scheduled notifications
- */
-export const cancelAllNotifications = async (): Promise<void> => {
-  await Notifications.cancelAllScheduledNotificationsAsync();
-};
+export const cancelAllNotifications = async (): Promise<void> =>
+  Notifications.cancelAllScheduledNotificationsAsync();
 
-/**
- * Get notification badge count
- */
-export const getBadgeCount = async (): Promise<number> => {
-  return await Notifications.getBadgeCountAsync();
-};
+export const getBadgeCount = async (): Promise<number> =>
+  Notifications.getBadgeCountAsync();
 
-/**
- * Set notification badge count
- */
 export const setBadgeCount = async (count: number): Promise<void> => {
   await Notifications.setBadgeCountAsync(count);
 };
 
-/**
- * Clear notification badge
- */
 export const clearBadge = async (): Promise<void> => {
   await Notifications.setBadgeCountAsync(0);
 };
 
 /**
- * Remove push token from Firestore (call on logout)
+ * Format notification copy based on type (used server-side helper mirror).
  */
-export const removePushToken = async (uid: string): Promise<void> => {
-  try {
-    // Get all tokens for this user
-    const tokensRef = collection(firestore, 'users', uid, 'pushTokens');
-    // Note: In production, you'd query and delete specific tokens
-    // For now, we'll just log
-    console.log('Push tokens should be removed on logout');
-  } catch (error) {
-    console.error('Error removing push token:', error);
-  }
-};
-
-/**
- * Format notification message based on type
- */
-export const formatNotificationMessage = (data: NotificationData): { title: string; body: string } => {
+export const formatNotificationMessage = (
+  data: NotificationData
+): { title: string; body: string } => {
   switch (data.type) {
+    case 'new_message':
+      return {
+        title: data.circleId ? 'New Message' : 'New Message',
+        body: `${data.senderName ?? 'Someone'} sent a message`,
+      };
     case 'new_member':
-      return {
-        title: 'New Member',
-        body: `${data.memberName} joined your circle`,
-      };
-
+      return { title: 'New Member', body: `${data.memberName} joined your circle` };
     case 'new_plan':
-      return {
-        title: 'New Plan',
-        body: `${data.memberName} created a plan — ${data.planTitle}`,
-      };
-
+      return { title: 'New Plan', body: `${data.memberName} created — ${data.planTitle}` };
     case 'rsvp_nudge':
-      return {
-        title: 'RSVP Reminder',
-        body: `Don't forget to RSVP for ${data.planTitle}`,
-      };
-
+      return { title: 'RSVP Reminder', body: `Don't forget to RSVP for ${data.planTitle}` };
     case 'plan_reminder':
-      return {
-        title: 'Plan Tomorrow',
-        body: `${data.planTitle} is tomorrow!`,
-      };
-
+      return { title: 'Plan Tomorrow', body: `${data.planTitle} is tomorrow!` };
     case 'transit_match':
-      return {
-        title: 'New Transit Circle',
-        body: `A new circle was posted for ${data.routeId}`,
-      };
-
+      return { title: 'New Transit Circle', body: `A new circle for ${data.routeId}` };
     case 'archive_prompt':
-      return {
-        title: 'Journey Complete',
-        body: 'Your circle has been archived',
-      };
-
+      return { title: 'Journey Complete', body: 'Your circle has been archived' };
     default:
-      return {
-        title: 'Notification',
-        body: 'You have a new notification',
-      };
+      return { title: 'Notification', body: 'You have a new notification' };
   }
 };

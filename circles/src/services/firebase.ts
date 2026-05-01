@@ -32,12 +32,18 @@ export const db = getDatabase(app);
 export const firestore = getFirestore(app);
 export const storage = getStorage(app);
 
-// Firebase Cloud Messaging (for push notifications)
-let messaging;
+// Firebase Cloud Messaging (native FCM — only available on physical devices)
+// Note: Circles uses Expo Push Service which routes through FCM/APNs,
+// so the native messaging SDK is not required for push to work.
+// This is kept for future direct FCM usage only.
+let messaging: ReturnType<typeof getMessaging> | undefined;
 try {
-  messaging = getMessaging(app);
-} catch (error) {
-  console.log('FCM not available on this platform');
+  if (typeof navigator !== 'undefined' && navigator.product !== 'ReactNative') {
+    // Web only — native RN builds use expo-notifications instead
+    messaging = getMessaging(app);
+  }
+} catch {
+  // Silently ignore — expo-notifications handles push on native
 }
 export { messaging };
 

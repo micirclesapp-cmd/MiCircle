@@ -8,33 +8,57 @@ import {
 } from '../services/notification.service';
 
 /**
- * Hook to manage in-app notification banner
- * Use this in your root App component or RootNavigator
+ * Hook to manage the in-app notification banner.
+ *
+ * - Registers a callback with notification.service so foreground notifications
+ *   are captured and displayed as a custom banner instead of an OS alert.
+ * - Provides handleNotificationPress which navigates to the right screen when
+ *   the user taps the in-app banner.
+ *
+ * Use this in NotificationProvider (mounted inside NavigationContainer).
  */
 export const useInAppNotifications = () => {
-  const [currentNotification, setCurrentNotification] = useState<InAppNotification | null>(null);
+  const [currentNotification, setCurrentNotification] =
+    useState<InAppNotification | null>(null);
   const navigation = useNavigation();
 
   useEffect(() => {
-    // Set up the callback for showing in-app notifications
+    // Register callback so foreground push arrives here as an in-app banner
     setInAppNotificationCallback((notification) => {
       setCurrentNotification(notification);
     });
 
     return () => {
+      // Clear callback on unmount
       setInAppNotificationCallback(() => {});
     };
   }, []);
 
+  /**
+   * Called when the user taps the in-app banner.
+   * Delegates navigation to handleNotificationNavigation from notification.service
+   * (which uses the global navigationRef), then also tries the hook's navigation
+   * as a fallback in case the ref isn't wired yet.
+   */
   const handleNotificationPress = (notification: InAppNotification) => {
-    // Handle navigation based on notification type
-    const data = notification.data;
+    dismissNotification();
+    const data: NotificationData = notification.data;
 
     try {
       switch (data.type) {
+        case 'new_message':
+          if (data.circleId) {
+            navigation.navigate('CircleChatScreen' as never, {
+              circleId: data.circleId,
+            } as never);
+          }
+          break;
+
         case 'new_member':
           if (data.circleId) {
-            navigation.navigate('CircleScreen' as never, { circleId: data.circleId } as never);
+            navigation.navigate('CircleScreen' as never, {
+              circleId: data.circleId,
+            } as never);
           }
           break;
 
@@ -45,6 +69,10 @@ export const useInAppNotifications = () => {
             navigation.navigate('PlanDetailScreen' as never, {
               circleId: data.circleId,
               planId: data.planId,
+            } as never);
+          } else if (data.circleId) {
+            navigation.navigate('CirclePlannerScreen' as never, {
+              circleId: data.circleId,
             } as never);
           }
           break;
@@ -58,14 +86,14 @@ export const useInAppNotifications = () => {
           break;
 
         case 'archive_prompt':
-          // Handled by ArchivePromptHandler
+          // Handled by ArchivePromptHandler — no navigation needed
           break;
 
         default:
-          console.warn('Unknown notification type:', data.type);
+          console.warn('Unknown notification type in banner press:', (data as any).type);
       }
     } catch (error) {
-      console.error('Error handling notification press:', error);
+      console.error('Error handling in-app notification press:', error);
     }
   };
 

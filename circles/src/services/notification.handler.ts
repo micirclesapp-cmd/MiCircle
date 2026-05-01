@@ -115,20 +115,16 @@ export const useNotificationHandler = () => {
   };
 };
 
+
 /**
- * Configure notification handlers
+ * @deprecated Use configureNotificationHandlers() from notification.service.ts instead.
+ * This function is kept as a no-op to avoid import errors in legacy call sites.
+ * The canonical handler (foreground suppression + in-app banner) is set in notification.service.ts.
  */
 export const configureNotifications = () => {
-  // Set notification handler for when app is in foreground
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowAlert: true,
-      shouldPlaySound: true,
-      shouldSetBadge: true,
-    }),
-  });
-
-  // Request notification permissions
+  // No-op: handler is configured in notification.service.ts configureNotificationHandlers()
+  // Do NOT set a second Notifications.setNotificationHandler here — it would override
+  // the foreground suppression and show raw OS banners instead of our custom banner.
   Notifications.requestPermissionsAsync().then((status) => {
     if (status.granted) {
       console.log('Notification permissions granted');
@@ -137,3 +133,4 @@ export const configureNotifications = () => {
     }
   });
 };
+

@@ -1,18 +1,81 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  ScrollView,
+  Switch,
+  ActivityIndicator,
+} from 'react-native';
 import { signOut } from 'firebase/auth';
-import { auth } from '../../services/firebase';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { auth, firestore } from '../../services/firebase';
+import { removePushToken } from '../../services/notification.service';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
+
+interface NotificationPrefs {
+  messages: boolean;
+  planReminders: boolean;
+}
 
 /**
  * ProfileScreen - User profile and settings
  */
 export default function ProfileScreen() {
   const user = auth.currentUser;
+  const [notifPrefs, setNotifPrefs] = useState<NotificationPrefs>({
+    messages: true,
+    planReminders: true,
+  });
+  const [savingPref, setSavingPref] = useState<string | null>(null);
+
+  // Load notification preferences from Firestore on mount
+  useEffect(() => {
+    const loadPrefs = async () => {
+      if (!user) return;
+      try {
+        const userDoc = await getDoc(doc(firestore, 'users', user.uid));
+        const prefs = userDoc.data()?.notificationPrefs;
+        if (prefs) {
+          setNotifPrefs({
+            messages: prefs.messages !== false,
+            planReminders: prefs.planReminders !== false,
+          });
+        }
+      } catch (error) {
+        console.error('Error loading notification prefs:', error);
+      }
+    };
+    loadPrefs();
+  }, [user]);
+
+  const handleTogglePref = async (key: keyof NotificationPrefs, value: boolean) => {
+    if (!user) return;
+    // Optimistic update
+    setNotifPrefs((prev) => ({ ...prev, [key]: value }));
+    setSavingPref(key);
+    try {
+      await updateDoc(doc(firestore, 'users', user.uid), {
+        [`notificationPrefs.${key}`]: value,
+      });
+    } catch (error) {
+      console.error(`Error saving ${key} pref:`, error);
+      // Revert on failure
+      setNotifPrefs((prev) => ({ ...prev, [key]: !value }));
+    } finally {
+      setSavingPref(null);
+    }
+  };
 
   const handleSignOut = async () => {
     try {
+      // Remove device push token before signing out so this device
+      // stops receiving notifications immediately
+      if (user) {
+        await removePushToken(user.uid);
+      }
       await signOut(auth);
       console.log('User signed out');
     } catch (error) {
@@ -34,14 +97,9 @@ export default function ProfileScreen() {
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Account</Text>
-        
-        <TouchableOpacity style={styles.menuItem}>
-          <Text style={styles.menuItemText}>Edit Profile</Text>
-          <Text style={styles.menuItemArrow}>→</Text>
-        </TouchableOpacity>
 
         <TouchableOpacity style={styles.menuItem}>
-          <Text style={styles.menuItemText}>Settings</Text>
+          <Text style={styles.menuItemText}>Edit Profile</Text>
           <Text style={styles.menuItemArrow}>→</Text>
         </TouchableOpacity>
 
@@ -51,9 +109,52 @@ export default function ProfileScreen() {
         </TouchableOpacity>
       </View>
 
+      {/* ── Notification Settings ── */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Notifications</Text>
+
+        <View style={styles.toggleItem}>
+          <View style={styles.toggleTextContainer}>
+            <Text style={styles.menuItemText}>Message Notifications</Text>
+            <Text style={styles.toggleSubtext}>
+              Alerts for new messages in your circles
+            </Text>
+          </View>
+          {savingPref === 'messages' ? (
+            <ActivityIndicator size="small" color={Colors.primary} />
+          ) : (
+            <Switch
+              value={notifPrefs.messages}
+              onValueChange={(v) => handleTogglePref('messages', v)}
+              trackColor={{ false: Colors.border, true: Colors.primary }}
+              thumbColor={Colors.surface}
+            />
+          )}
+        </View>
+
+        <View style={styles.toggleItem}>
+          <View style={styles.toggleTextContainer}>
+            <Text style={styles.menuItemText}>Plan Reminders</Text>
+            <Text style={styles.toggleSubtext}>
+              Reminders for upcoming plans and RSVPs
+            </Text>
+          </View>
+          {savingPref === 'planReminders' ? (
+            <ActivityIndicator size="small" color={Colors.primary} />
+          ) : (
+            <Switch
+              value={notifPrefs.planReminders}
+              onValueChange={(v) => handleTogglePref('planReminders', v)}
+              trackColor={{ false: Colors.border, true: Colors.primary }}
+              thumbColor={Colors.surface}
+            />
+          )}
+        </View>
+      </View>
+
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>About</Text>
-        
+
         <TouchableOpacity style={styles.menuItem}>
           <Text style={styles.menuItemText}>Help & Support</Text>
           <Text style={styles.menuItemArrow}>→</Text>
@@ -80,6 +181,8 @@ export default function ProfileScreen() {
     </ScrollView>
   );
 }
+
+
 
 const styles = StyleSheet.create({
   container: {
@@ -149,6 +252,27 @@ const styles = StyleSheet.create({
   menuItemArrow: {
     fontSize: Typography.fontSize.lg,
     color: Colors.textTertiary,
+  },
+  toggleItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    backgroundColor: Colors.surface,
+    borderRadius: 8,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  toggleTextContainer: {
+    flex: 1,
+    marginRight: 12,
+  },
+  toggleSubtext: {
+    fontSize: Typography.fontSize.xs,
+    color: Colors.textTertiary,
+    marginTop: 2,
   },
   signOutButton: {
     marginHorizontal: 16,

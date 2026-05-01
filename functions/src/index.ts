@@ -9,6 +9,7 @@ export { archiveTransitCircles, manualArchiveTransitCircles } from './archiveTra
 
 // Push notification functions
 export {
+  onNewMessage,
   onNewMember,
   onNewPlan,
   sendRSVPNudges,
