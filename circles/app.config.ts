@@ -30,6 +30,8 @@ export default {
         'READ_EXTERNAL_STORAGE',
         'WRITE_EXTERNAL_STORAGE',
         'NOTIFICATIONS',
+        'ACCESS_COARSE_LOCATION',
+        'ACCESS_FINE_LOCATION',
       ],
     },
     web: {

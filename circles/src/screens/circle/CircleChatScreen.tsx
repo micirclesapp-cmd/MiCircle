@@ -360,6 +360,7 @@ export default function CircleChatScreen({
           <MessageBubble
             message={item}
             isOwn={item.senderUid === currentUid}
+            circleId={circleId}
             onLongPress={() => {
               setSelectedMessageForReaction(item);
               setShowReactionPicker(true);

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -7,8 +7,9 @@ import {
   Image,
   ScrollView,
   Alert,
+  Share,
 } from 'react-native';
-import { doc, updateDoc, arrayUnion, increment, addDoc, collection, query, where, getDocs, Timestamp } from 'firebase/firestore';
+import { doc, updateDoc, increment, addDoc, collection, query, where, getDocs, runTransaction, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { firestore, auth } from '../../services/firebase';
 import { Colors } from '../../constants/colors';
 import type { OpenCircle } from '../../types/feed.types';
@@ -41,22 +42,46 @@ export const FeedCard: React.FC<FeedCardProps> = ({ circle, onJoin, onReport }) 
   const [expanded, setExpanded] = useState(false);
   const [showReportSheet, setShowReportSheet] = useState(false);
   const [joining, setJoining] = useState(false);
+  
+  const [isPending, setIsPending] = useState(false);
+  const [isOnCooldown, setIsOnCooldown] = useState(false);
 
   const currentUserUid = auth.currentUser?.uid || '';
-  const isJoined = circle.members.includes(currentUserUid);
-  const isPending = circle.joinRequests?.includes(currentUserUid);
+  const currentUserDisplayName = auth.currentUser?.displayName || 'A user';
+  const isJoined = circle.members?.includes(currentUserUid);
+
+  useEffect(() => {
+    const checkJoinRequestStatus = async () => {
+      if (!currentUserUid || isJoined || circle.joinMode === 'open') return;
+      try {
+        const reqRef = doc(firestore, `public_circles/${circle.id}/joinRequests/${currentUserUid}`);
+        const reqDoc = await getDoc(reqRef);
+        if (reqDoc.exists()) {
+          const data = reqDoc.data();
+          if (data.status === 'pending') {
+            setIsPending(true);
+          } else if (data.status === 'declined') {
+            // Check 24h cooldown
+            const declinedAt = data.updatedAt?.toMillis() || 0;
+            const now = Date.now();
+            if (now - declinedAt < 24 * 60 * 60 * 1000) {
+              setIsOnCooldown(true);
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error checking join status:', error);
+      }
+    };
+    checkJoinRequestStatus();
+  }, [circle.id, currentUserUid, isJoined, circle.joinMode]);
 
   const shouldShowBookingBanner = () => {
     if (!circle.transitDate) return false;
-
-    // Only show for future dates (not archived)
     const now = new Date();
     const transitDate = new Date(circle.transitDate);
     if (transitDate < now) return false;
-
-    // Don't show if user is already a member (they presumably have a ticket)
     if (isJoined) return false;
-
     return true;
   };
 
@@ -73,32 +98,86 @@ export const FeedCard: React.FC<FeedCardProps> = ({ circle, onJoin, onReport }) 
     return new Date(timestamp).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
   };
 
+  const handleShare = async () => {
+    try {
+      const shareUrl = `https://micircles.app/feed/${circle.id}`;
+      await Share.share({
+        message: `Check out this circle on MiCircles: ${circle.name} ${shareUrl}`,
+        url: shareUrl, // iOS specific
+        title: circle.name, // Android specific
+      });
+    } catch (error) {
+      console.error('Error sharing:', error);
+    }
+  };
+
   const handleJoin = async () => {
-    if (!currentUserUid || joining) return;
+    if (!currentUserUid || joining || isJoined || isPending || isOnCooldown) return;
+
+    if (isOnCooldown) {
+      Alert.alert('Please Wait', 'Your previous request was declined. You can try again after 24 hours.');
+      return;
+    }
 
     setJoining(true);
     try {
       const circleRef = doc(firestore, 'public_circles', circle.id);
 
       if (circle.joinMode === 'open') {
-        // Immediately add to members
-        await updateDoc(circleRef, {
-          members: arrayUnion(currentUserUid),
-          memberCount: increment(1),
+        // F-10: Atomic Join Transaction
+        await runTransaction(firestore, async (transaction) => {
+          const cDoc = await transaction.get(circleRef);
+          if (!cDoc.exists()) throw new Error('Circle not found');
+          const data = cDoc.data() as OpenCircle;
+          
+          if (data.maxMembers && data.memberCount >= data.maxMembers) {
+            throw new Error('Circle is full');
+          }
+          if (data.members.includes(currentUserUid)) {
+            throw new Error('Already a member');
+          }
+
+          const newMembers = [...data.members, currentUserUid];
+          transaction.update(circleRef, {
+            members: newMembers,
+            memberCount: increment(1)
+          });
         });
+
+        // Add system message to chat
+        const messagesRef = collection(firestore, `public_circles/${circle.id}/messages`);
+        await addDoc(messagesRef, {
+          text: `${currentUserDisplayName} joined the circle`,
+          isSystem: true,
+          createdAt: serverTimestamp(),
+          senderId: 'system'
+        });
+
         Alert.alert('Joined!', `You're now part of ${circle.name}`);
+        onJoin();
       } else {
-        // Add to join requests
-        await updateDoc(circleRef, {
-          joinRequests: arrayUnion(currentUserUid),
+        // F-10: Approval Mode Join Request
+        const reqRef = doc(firestore, `public_circles/${circle.id}/joinRequests/${currentUserUid}`);
+        await setDoc(reqRef, {
+          uid: currentUserUid,
+          name: currentUserDisplayName,
+          avatarUrl: auth.currentUser?.photoURL || '',
+          status: 'pending',
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
         });
+        
+        setIsPending(true);
         Alert.alert('Request Sent', 'The creator will review your request');
       }
 
-      onJoin();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error joining circle:', error);
-      Alert.alert('Error', 'Failed to join circle. Please try again.');
+      if (error.message === 'Circle is full') {
+        Alert.alert('Sorry', 'This circle has reached its maximum member limit.');
+      } else {
+        Alert.alert('Error', 'Failed to join circle. Please try again.');
+      }
     } finally {
       setJoining(false);
     }
@@ -106,6 +185,13 @@ export const FeedCard: React.FC<FeedCardProps> = ({ circle, onJoin, onReport }) 
 
   const handleReport = async (reason: string) => {
     if (!currentUserUid) return;
+
+    // F-12 prevent self-reporting
+    if (circle.creatorUid === currentUserUid) {
+      Alert.alert('Notice', 'You cannot report your own circle.');
+      setShowReportSheet(false);
+      return;
+    }
 
     try {
       // Write report to Firestore
@@ -117,7 +203,7 @@ export const FeedCard: React.FC<FeedCardProps> = ({ circle, onJoin, onReport }) 
         timestamp: Date.now(),
       });
 
-      // Check if card has 5+ reports in last 24h
+      // F-12 Auto-hide check
       const twentyFourHoursAgo = Date.now() - 24 * 60 * 60 * 1000;
       const q = query(
         reportsRef,
@@ -177,13 +263,13 @@ export const FeedCard: React.FC<FeedCardProps> = ({ circle, onJoin, onReport }) 
     );
   };
 
-  const pitchText = expanded ? circle.pitch : circle.pitch.slice(0, 100);
-  const needsExpansion = circle.pitch.length > 100;
+  const pitchText = expanded ? circle.pitch : circle.pitch?.slice(0, 100) || '';
+  const needsExpansion = circle.pitch && circle.pitch.length > 100;
 
   return (
     <>
       <View style={styles.card}>
-        {/* Top Row: Category Tag + Time */}
+        {/* Top Row: Category Tag + Time + Share */}
         <View style={styles.topRow}>
           <View
             style={[
@@ -195,7 +281,12 @@ export const FeedCard: React.FC<FeedCardProps> = ({ circle, onJoin, onReport }) 
               {circle.category.charAt(0).toUpperCase() + circle.category.slice(1)}
             </Text>
           </View>
-          <Text style={styles.timeText}>{getTimeAgo(circle.createdAt)}</Text>
+          <View style={styles.topRightActions}>
+            <Text style={styles.timeText}>{getTimeAgo(circle.createdAt)}</Text>
+            <TouchableOpacity onPress={handleShare} style={styles.shareButton}>
+              <Text style={styles.shareIcon}>🔗</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Title Row: Name + Member Count */}
@@ -258,7 +349,7 @@ export const FeedCard: React.FC<FeedCardProps> = ({ circle, onJoin, onReport }) 
         )}
 
         {/* Tags Row */}
-        {circle.tags.length > 0 && (
+        {circle.tags && circle.tags.length > 0 && (
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -287,19 +378,20 @@ export const FeedCard: React.FC<FeedCardProps> = ({ circle, onJoin, onReport }) 
               styles.joinButton,
               isJoined && styles.joinButtonJoined,
               isPending && styles.joinButtonPending,
-              (circle.joinMode === 'approval' && !isJoined && !isPending) && styles.joinButtonOutline,
+              isOnCooldown && styles.joinButtonCooldown,
+              (circle.joinMode === 'approval' && !isJoined && !isPending && !isOnCooldown) && styles.joinButtonOutline,
             ]}
             onPress={handleJoin}
-            disabled={isJoined || isPending || joining}
+            disabled={isJoined || isPending || joining || isOnCooldown}
           >
             <Text
               style={[
                 styles.joinButtonText,
-                (isJoined || isPending) && styles.joinButtonTextDisabled,
-                (circle.joinMode === 'approval' && !isJoined && !isPending) && styles.joinButtonTextOutline,
+                (isJoined || isPending || isOnCooldown) && styles.joinButtonTextDisabled,
+                (circle.joinMode === 'approval' && !isJoined && !isPending && !isOnCooldown) && styles.joinButtonTextOutline,
               ]}
             >
-              {isJoined ? 'Joined ✓' : isPending ? 'Requested...' : circle.joinMode === 'open' ? 'Join' : 'Request to Join'}
+              {isJoined ? 'Joined ✓' : isPending ? 'Requested...' : isOnCooldown ? 'Declined' : circle.joinMode === 'open' ? 'Join' : 'Request to Join'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -328,6 +420,17 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 12,
+  },
+  topRightActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  shareButton: {
+    marginLeft: 12,
+    padding: 4,
+  },
+  shareIcon: {
+    fontSize: 16,
   },
   categoryTag: {
     paddingHorizontal: 12,
@@ -451,6 +554,9 @@ const styles = StyleSheet.create({
   },
   joinButtonPending: {
     backgroundColor: Colors.surfaceAlt,
+  },
+  joinButtonCooldown: {
+    backgroundColor: Colors.border,
   },
   joinButtonText: {
     fontSize: 15,

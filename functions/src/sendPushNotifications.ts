@@ -455,3 +455,56 @@ export const sendTestNotification = functions.https.onCall(
     return { success: true, message: 'Test notification sent' };
   }
 );
+
+/**
+ * Firestore trigger: Send notification when a join request is created (Notify Admin).
+ */
+export const onJoinRequest = functions.firestore
+  .document('public_circles/{circleId}/joinRequests/{uid}')
+  .onCreate(async (snapshot, context) => {
+    const request = snapshot.data();
+    const { circleId } = context.params;
+
+    const circleDoc = await firestore.collection('public_circles').doc(circleId).get();
+    const circle = circleDoc.data();
+    if (!circle) return;
+
+    await sendPushNotifications(
+      [circle.creatorUid],
+      'Join Request',
+      `${request.name} wants to join ${circle.name}`,
+      {
+        type: 'join_request',
+        circleId,
+      },
+      'messages'
+    );
+  });
+
+/**
+ * Firestore trigger: Send notification when a join request is updated (Approve/Decline).
+ */
+export const onJoinRequestUpdated = functions.firestore
+  .document('public_circles/{circleId}/joinRequests/{uid}')
+  .onUpdate(async (change, context) => {
+    const after = change.after.data();
+    const before = change.before.data();
+    const { circleId, uid } = context.params;
+
+    if (before.status === 'pending' && after.status === 'approved') {
+      const circleDoc = await firestore.collection('public_circles').doc(circleId).get();
+      const circle = circleDoc.data();
+      if (!circle) return;
+
+      await sendPushNotifications(
+        [uid],
+        'Request Approved ✅',
+        `You can now chat in ${circle.name}`,
+        {
+          type: 'join_approved',
+          circleId,
+        },
+        'messages'
+      );
+    }
+  });

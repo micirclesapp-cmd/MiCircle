@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -11,10 +11,14 @@ import {
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, query, where, getDocs } from 'firebase/firestore';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { firestore, auth } from '../../services/firebase';
 import { Colors } from '../../constants/colors';
+import { isValidTrainNumber } from '../../services/transit.service';
 import type { CircleCategory, TransitMode, JoinMode } from '../../types/feed.types';
+
+const DRAFT_KEY = '@create_circle_draft';
 
 type FeedStackParamList = {
   CreateOpenCircleScreen: undefined;
@@ -53,21 +57,75 @@ export const CreateOpenCircleScreen: React.FC = () => {
   const [tagInput, setTagInput] = useState('');
   const [joinMode, setJoinMode] = useState<JoinMode>('open');
   const [publishing, setPublishing] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(true);
 
   const currentUser = auth.currentUser;
 
+  useEffect(() => {
+    const loadDraft = async () => {
+      try {
+        const draftStr = await AsyncStorage.getItem(DRAFT_KEY);
+        if (draftStr) {
+          Alert.alert(
+            'Restore Draft?',
+            'You have an unsaved circle. Do you want to restore it?',
+            [
+              { 
+                text: 'Discard', 
+                style: 'destructive',
+                onPress: () => {
+                  AsyncStorage.removeItem(DRAFT_KEY);
+                  setIsRestoring(false);
+                }
+              },
+              { 
+                text: 'Restore', 
+                onPress: () => {
+                  const draft = JSON.parse(draftStr);
+                  setCategory(draft.category || null);
+                  setName(draft.name || '');
+                  setPitch(draft.pitch || '');
+                  setTransitMode(draft.transitMode || null);
+                  setTransitRoute(draft.transitRoute || '');
+                  setTransitDate(draft.transitDate || '');
+                  setCity(draft.city || '');
+                  setNeighbourhood(draft.neighbourhood || '');
+                  setTags(draft.tags || []);
+                  setJoinMode(draft.joinMode || 'open');
+                  setStep(draft.step || 1);
+                  setIsRestoring(false);
+                } 
+              }
+            ]
+          );
+        } else {
+          setIsRestoring(false);
+        }
+      } catch (e) {
+        setIsRestoring(false);
+      }
+    };
+    loadDraft();
+  }, []);
+
+  useEffect(() => {
+    if (isRestoring) return;
+    const saveDraft = async () => {
+      const draft = {
+        category, name, pitch, transitMode, transitRoute, transitDate, city, neighbourhood, tags, joinMode, step
+      };
+      await AsyncStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    };
+    saveDraft();
+  }, [category, name, pitch, transitMode, transitRoute, transitDate, city, neighbourhood, tags, joinMode, step, isRestoring]);
+
   const getPlaceholder = () => {
     switch (category) {
-      case 'travel':
-        return '12163 Chennai Express — 20 April';
-      case 'fitness':
-        return 'Morning Walkers — Koramangala 6AM';
-      case 'food':
-        return 'Sunday Brunch Club — Indiranagar';
-      case 'music':
-        return 'Guitar Jam Sessions — Weekends';
-      default:
-        return 'Give your circle a catchy name';
+      case 'travel': return '12163 Chennai Express — 20 April';
+      case 'fitness': return 'Morning Walkers — Koramangala 6AM';
+      case 'food': return 'Sunday Brunch Club — Indiranagar';
+      case 'music': return 'Guitar Jam Sessions — Weekends';
+      default: return 'Give your circle a catchy name';
     }
   };
 
@@ -85,33 +143,8 @@ export const CreateOpenCircleScreen: React.FC = () => {
     setTags(tags.filter((_, i) => i !== index));
   };
 
-  const handlePublish = async () => {
-    if (!currentUser || !category) return;
-
-    setPublishing(true);
-
+  const executePublish = async () => {
     try {
-      // Run content moderation check
-      const { checkContent, getModerationErrorMessage } = await import('../../services/moderation.service');
-      
-      // Check circle name
-      const nameResult = await checkContent(name);
-      if (!nameResult.isSafe) {
-        Alert.alert('Content Not Allowed', getModerationErrorMessage(nameResult));
-        setPublishing(false);
-        return;
-      }
-
-      // Check pitch
-      const pitchResult = await checkContent(pitch);
-      if (!pitchResult.isSafe) {
-        Alert.alert('Content Not Allowed', getModerationErrorMessage(pitchResult));
-        setPublishing(false);
-        return;
-      }
-
-      // Check user's active circle count (TODO: implement this check)
-
       // Prepare circle data
       const circleData: any = {
         name,
@@ -119,40 +152,141 @@ export const CreateOpenCircleScreen: React.FC = () => {
         pitch,
         tags,
         joinMode,
-        creatorUid: currentUser.uid,
-        creatorName: currentUser.displayName || 'Unknown',
-        creatorAvatar: currentUser.photoURL || '',
+        creatorUid: currentUser!.uid,
+        creatorName: currentUser!.displayName || 'Unknown',
+        creatorAvatar: currentUser!.photoURL || '',
         creatorJoinYear: new Date().getFullYear(),
         memberCount: 1,
-        members: [currentUser.uid],
-        joinRequests: [],
-        createdAt: Date.now(),
+        members: [currentUser!.uid],
         isArchived: false,
         isPromoted: false,
+        createdAt: Date.now(), // Store as milliseconds for easier querying
       };
 
-      // Add transit-specific fields
       if (category === 'travel' && transitMode && transitRoute && transitDate) {
         circleData.transitMode = transitMode;
         circleData.transitRoute = transitRoute;
         circleData.transitDate = transitDate;
       } else {
-        // Add location fields
         circleData.city = city;
         circleData.location = neighbourhood ? `${neighbourhood}, ${city}` : city;
       }
 
-      // Write to Firestore
       const circlesRef = collection(firestore, 'public_circles');
       const docRef = await addDoc(circlesRef, circleData);
 
-      // TODO: If transit circle, schedule Cloud Function to archive 24h after transitDate
+      await AsyncStorage.removeItem(DRAFT_KEY);
 
       Alert.alert('Success', 'Your circle is live! 🎉');
       navigation.navigate('OpenCircleDetailScreen', { circleId: docRef.id });
     } catch (error) {
       console.error('Error publishing circle:', error);
       Alert.alert('Error', 'Failed to publish circle. Please try again.');
+    } finally {
+      setPublishing(false);
+    }
+  };
+
+  const handlePublish = async () => {
+    if (!currentUser || !category) return;
+
+    setPublishing(true);
+
+    try {
+      // F-12: New Account re-auth check
+      const creationTime = currentUser.metadata.creationTime;
+      if (creationTime) {
+        const ageInMs = Date.now() - new Date(creationTime).getTime();
+        if (ageInMs < 24 * 60 * 60 * 1000) {
+          // For MVP, just alert. In production we'd call reauthenticateWithCredential.
+          Alert.alert('Security Check', 'As a new user, please verify your email before posting.', [{ text: 'OK' }]);
+          setPublishing(false);
+          return;
+        }
+      }
+
+      // F-11 & F-12: Date validation
+      if (category === 'travel' && transitDate) {
+        const tDate = new Date(transitDate);
+        tDate.setHours(0, 0, 0, 0);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        if (tDate < today) {
+          Alert.alert('Invalid Date', 'Travel date must be today or in the future.');
+          setPublishing(false);
+          return;
+        }
+      }
+
+      // F-12: Spam Throttle & Duplicate detection
+      const last24h = Date.now() - 24 * 60 * 60 * 1000;
+      const q = query(
+        collection(firestore, 'public_circles'), 
+        where('creatorUid', '==', currentUser.uid),
+        where('createdAt', '>=', last24h)
+      );
+      const snapshot = await getDocs(q);
+      
+      if (snapshot.size >= 3) {
+        Alert.alert('Limit Reached', 'You have reached your daily limit of 3 circles. Upgrade to Circles+ for more.');
+        setPublishing(false);
+        return;
+      }
+
+      const duplicate = snapshot.docs.some(doc => doc.data().name.toLowerCase() === name.toLowerCase());
+      if (duplicate) {
+        Alert.alert('Duplicate', "You've recently posted a circle with a similar name.");
+        setPublishing(false);
+        return;
+      }
+
+      // F-12: Content Moderation
+      const { checkContent, getModerationErrorMessage } = await import('../../services/moderation.service');
+      
+      const nameResult = await checkContent(name);
+      if (!nameResult.isSafe) {
+        Alert.alert('Content Not Allowed', getModerationErrorMessage(nameResult));
+        setPublishing(false);
+        return;
+      }
+
+      const pitchResult = await checkContent(pitch);
+      if (!pitchResult.isSafe) {
+        Alert.alert('Content Not Allowed', getModerationErrorMessage(pitchResult));
+        setPublishing(false);
+        return;
+      }
+
+      if (tags.length > 0) {
+        const tagsResult = await checkContent(tags.join(' '));
+        if (!tagsResult.isSafe) {
+          Alert.alert('Tags Not Allowed', 'One or more tags contain inappropriate content.');
+          setPublishing(false);
+          return;
+        }
+      }
+
+      // F-11: Train number soft validation
+      if (category === 'travel' && transitMode === 'train' && transitRoute) {
+        if (!isValidTrainNumber(transitRoute)) {
+          Alert.alert(
+            'Unknown Train Number',
+            'This train number is not recognized. Do you want to proceed anyway?',
+            [
+              { text: 'Cancel', style: 'cancel', onPress: () => setPublishing(false) },
+              { text: 'Proceed', onPress: () => executePublish() }
+            ]
+          );
+          return; // Wait for user decision
+        }
+      }
+
+      // If all passed, execute publish
+      await executePublish();
+
+    } catch (error) {
+      console.error('Validation error:', error);
+      Alert.alert('Error', 'An error occurred during validation.');
       setPublishing(false);
     }
   };
@@ -179,7 +313,7 @@ export const CreateOpenCircleScreen: React.FC = () => {
     </View>
   );
 
-  // Step 1: Category Selection
+  // Step 1: Category
   const renderStep1 = () => (
     <ScrollView style={styles.stepContainer}>
       <Text style={styles.stepTitle}>What's your circle about?</Text>
@@ -213,10 +347,10 @@ export const CreateOpenCircleScreen: React.FC = () => {
         placeholder={getPlaceholder()}
         value={name}
         onChangeText={setName}
-        maxLength={50}
+        maxLength={60}
         placeholderTextColor={Colors.textTertiary}
       />
-      <Text style={styles.charCount}>{name.length}/50</Text>
+      <Text style={styles.charCount}>{name.length}/60</Text>
 
       <Text style={[styles.stepTitle, { marginTop: 24 }]}>Write a short pitch</Text>
       <Text style={styles.subtitle}>Who are you, and who are you looking for?</Text>
@@ -225,13 +359,13 @@ export const CreateOpenCircleScreen: React.FC = () => {
         placeholder="Tell people what this circle is about..."
         value={pitch}
         onChangeText={setPitch}
-        maxLength={200}
+        maxLength={140}
         multiline
         numberOfLines={4}
         textAlignVertical="top"
         placeholderTextColor={Colors.textTertiary}
       />
-      <Text style={styles.charCount}>{pitch.length}/200</Text>
+      <Text style={styles.charCount}>{pitch.length}/140</Text>
 
       <TouchableOpacity
         style={[styles.nextButton, (!name || !pitch) && styles.nextButtonDisabled]}
@@ -268,20 +402,12 @@ export const CreateOpenCircleScreen: React.FC = () => {
           </View>
 
           <Text style={[styles.label, { marginTop: 20 }]}>
-            {transitMode === 'train'
-              ? 'Train Number'
-              : transitMode === 'flight'
-              ? 'Flight Code'
-              : 'Route / Bus Number'}
+            {transitMode === 'train' ? 'Train Number' : transitMode === 'flight' ? 'Flight Code' : 'Route / Bus Number'}
           </Text>
           <TextInput
             style={styles.input}
             placeholder={
-              transitMode === 'train'
-                ? 'e.g. 12163'
-                : transitMode === 'flight'
-                ? 'e.g. 6E456'
-                : 'e.g. Bangalore - Chennai'
+              transitMode === 'train' ? 'e.g. 12163' : transitMode === 'flight' ? 'e.g. 6E456' : 'e.g. Bangalore - Chennai'
             }
             value={transitRoute}
             onChangeText={setTransitRoute}
@@ -326,17 +452,10 @@ export const CreateOpenCircleScreen: React.FC = () => {
       <TouchableOpacity
         style={[
           styles.nextButton,
-          category === 'travel'
-            ? !transitMode || !transitRoute || !transitDate
-            : !city,
-          styles.nextButtonDisabled,
+          (category === 'travel' ? !transitMode || !transitRoute || !transitDate : !city) && styles.nextButtonDisabled,
         ]}
         onPress={() => setStep(4)}
-        disabled={
-          category === 'travel'
-            ? !transitMode || !transitRoute || !transitDate
-            : !city
-        }
+        disabled={category === 'travel' ? !transitMode || !transitRoute || !transitDate : !city}
       >
         <Text style={styles.nextButtonText}>Next</Text>
       </TouchableOpacity>
@@ -414,17 +533,12 @@ export const CreateOpenCircleScreen: React.FC = () => {
         </View>
         <View style={styles.joinModeContent}>
           <Text style={styles.joinModeTitle}>Open — Anyone joins instantly</Text>
-          <Text style={styles.joinModeSubtitle}>
-            Recommended for transit and time-sensitive circles
-          </Text>
+          <Text style={styles.joinModeSubtitle}>Recommended for transit and time-sensitive circles</Text>
         </View>
       </TouchableOpacity>
 
       <TouchableOpacity
-        style={[
-          styles.joinModeCard,
-          joinMode === 'approval' && styles.joinModeCardSelected,
-        ]}
+        style={[styles.joinModeCard, joinMode === 'approval' && styles.joinModeCardSelected]}
         onPress={() => setJoinMode('approval')}
       >
         <View style={styles.radioButton}>
@@ -432,9 +546,7 @@ export const CreateOpenCircleScreen: React.FC = () => {
         </View>
         <View style={styles.joinModeContent}>
           <Text style={styles.joinModeTitle}>Approval Required — You review each request</Text>
-          <Text style={styles.joinModeSubtitle}>
-            You'll get notified when someone wants to join
-          </Text>
+          <Text style={styles.joinModeSubtitle}>You'll get notified when someone wants to join</Text>
         </View>
       </TouchableOpacity>
 
@@ -451,6 +563,10 @@ export const CreateOpenCircleScreen: React.FC = () => {
       </TouchableOpacity>
     </ScrollView>
   );
+
+  if (isRestoring) {
+    return <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}><ActivityIndicator size="large" color={Colors.primary} /></View>;
+  }
 
   return (
     <View style={styles.container}>
@@ -581,6 +697,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 12,
     marginTop: 12,
+    marginBottom: 20,
   },
   modeButton: {
     flex: 1,

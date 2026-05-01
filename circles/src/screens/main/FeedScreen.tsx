@@ -7,6 +7,8 @@ import {
   TouchableOpacity,
   RefreshControl,
   ActivityIndicator,
+  Modal,
+  TextInput,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -16,7 +18,6 @@ import {
   where,
   orderBy,
   limit,
-  onSnapshot,
   startAfter,
   getDocs,
   QueryDocumentSnapshot,
@@ -28,7 +29,9 @@ import { CategoryFilter } from '../../components/feed/CategoryFilter';
 import { TransitSearchBar } from '../../components/feed/TransitSearchBar';
 import { FeedCard } from '../../components/feed/FeedCard';
 import { ScreenLayout } from '../../components/shared/ScreenLayout';
+import { TransitRow } from '../../components/feed/TransitRow';
 import { useOfflineSync } from '../../hooks/useOffline';
+import { useLocation } from '../../hooks/useLocation';
 import type { OpenCircle, CircleCategory } from '../../types/feed.types';
 
 const FEED_CACHE_KEY = 'feed_cache';
@@ -46,6 +49,7 @@ const PAGE_SIZE = 20;
 
 export const FeedScreen: React.FC = () => {
   const navigation = useNavigation<FeedScreenNavigationProp>();
+  const { city: gpsCity, loading: locationLoading } = useLocation();
 
   const [circles, setCircles] = useState<OpenCircle[]>([]);
   const [loading, setLoading] = useState(true);
@@ -55,13 +59,30 @@ export const FeedScreen: React.FC = () => {
   const [hasMore, setHasMore] = useState(true);
 
   const [selectedCategory, setSelectedCategory] = useState<CircleCategory | 'all'>('all');
+  
+  // Location
   const [selectedCity, setSelectedCity] = useState<string>('Near me 📍');
+  const [isLocationModalVisible, setIsLocationModalVisible] = useState(false);
+  const [manualCityInput, setManualCityInput] = useState('');
+
+  // Search
+  const [searchQuery, setSearchQuery] = useState('');
   const [showTransitSearch, setShowTransitSearch] = useState(false);
   const [transitFilter, setTransitFilter] = useState<{ route: string; date: string } | null>(null);
 
+  // Update selected city when GPS finds it
   useEffect(() => {
+    if (gpsCity && gpsCity !== 'Near me 📍' && selectedCity === 'Near me 📍') {
+      setSelectedCity(gpsCity);
+    }
+  }, [gpsCity]);
+
+  // Load circles on dependency changes
+  useEffect(() => {
+    // If we're waiting for the first GPS location to resolve, wait a bit
+    if (locationLoading && selectedCity === 'Near me 📍') return;
     loadCircles();
-  }, [selectedCategory, transitFilter]);
+  }, [selectedCategory, transitFilter, selectedCity, searchQuery]);
 
   // Set up offline sync
   useOfflineSync(() => {
@@ -117,23 +138,51 @@ export const FeedScreen: React.FC = () => {
         );
       }
 
+      // Apply city filter if not 'Near me'
+      const cleanCity = selectedCity.replace(' 📍', '').trim();
+      if (cleanCity && cleanCity !== 'Near me' && cleanCity !== 'Unknown Location') {
+        // Since we can only have one inequality or array-contains, we filter equality on city
+        // Note: Firestore requires composite indexes for multiple where clauses.
+        // We assume city is an exact match for V1.
+        q = query(
+          circlesRef,
+          where('isArchived', '==', false),
+          where('city', '==', cleanCity),
+          orderBy('createdAt', 'desc'),
+          limit(PAGE_SIZE)
+        );
+      }
+
       // Pagination
       if (loadMore && lastDoc) {
         q = query(q, startAfter(lastDoc));
       }
 
       const snapshot = await getDocs(q);
-      const fetchedCircles: OpenCircle[] = [];
+      let fetchedCircles: OpenCircle[] = [];
 
       snapshot.forEach((doc) => {
         fetchedCircles.push({ id: doc.id, ...doc.data() } as OpenCircle);
       });
 
+      // Apply client-side text search filter
+      if (searchQuery.trim().length > 0) {
+        const queryLower = searchQuery.toLowerCase();
+        fetchedCircles = fetchedCircles.filter(
+          c => c.name.toLowerCase().includes(queryLower) || 
+               (c.pitch && c.pitch.toLowerCase().includes(queryLower))
+        );
+      }
+
       if (loadMore) {
-        setCircles((prev) => [...prev, ...fetchedCircles]);
+        setCircles((prev) => {
+          // Remove duplicates
+          const newCircles = [...prev, ...fetchedCircles];
+          const uniqueCircles = Array.from(new Map(newCircles.map(c => [c.id, c])).values());
+          return uniqueCircles;
+        });
       } else {
         setCircles(fetchedCircles);
-        // Save to cache
         await saveToCache(fetchedCircles);
       }
 
@@ -200,19 +249,22 @@ export const FeedScreen: React.FC = () => {
     </View>
   );
 
-  const renderEmptyState = () => (
-    <View style={styles.emptyState}>
-      <Text style={styles.emptyIcon}>🔍</Text>
-      <Text style={styles.emptyTitle}>No circles found nearby</Text>
-      <Text style={styles.emptySubtitle}>Be the first to post one</Text>
-      <TouchableOpacity
-        style={styles.emptyButton}
-        onPress={() => navigation.navigate('CreateOpenCircleScreen')}
-      >
-        <Text style={styles.emptyButtonText}>Create Circle</Text>
-      </TouchableOpacity>
-    </View>
-  );
+  const renderEmptyState = () => {
+    if (loading) return null;
+    return (
+      <View style={styles.emptyState}>
+        <Text style={styles.emptyIcon}>🔍</Text>
+        <Text style={styles.emptyTitle}>No circles found nearby</Text>
+        <Text style={styles.emptySubtitle}>Be the first to post a circle here</Text>
+        <TouchableOpacity
+          style={styles.emptyButton}
+          onPress={() => navigation.navigate('CreateOpenCircleScreen')}
+        >
+          <Text style={styles.emptyButtonText}>Create Circle</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  };
 
   const renderFeedCard = ({ item }: { item: OpenCircle }) => (
     <FeedCard
@@ -221,107 +273,177 @@ export const FeedScreen: React.FC = () => {
         navigation.navigate('OpenCircleDetailScreen', { circleId: item.id });
       }}
       onReport={() => {
-        // Refresh the feed after report
         onRefresh();
       }}
     />
   );
 
   const renderFooter = () => {
-    if (!loadingMore) return null;
-    return (
-      <View style={styles.footerLoader}>
-        <ActivityIndicator size="small" color={Colors.primary} />
-      </View>
-    );
+    if (loadingMore) {
+      return (
+        <View style={styles.footerLoader}>
+          <ActivityIndicator size="small" color={Colors.primary} />
+        </View>
+      );
+    }
+    
+    // "You've seen everything" text when feed is exhausted
+    if (!hasMore && circles.length > 0) {
+      return (
+        <View style={styles.footerTextContainer}>
+          <Text style={styles.footerText}>You've seen everything. Check back soon!</Text>
+        </View>
+      );
+    }
+    
+    return null;
   };
+
+  const renderLocationModal = () => (
+    <Modal visible={isLocationModalVisible} animationType="slide" transparent>
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <Text style={styles.modalTitle}>Where are you?</Text>
+          <TextInput
+            style={styles.modalInput}
+            placeholder="Enter a city name"
+            value={manualCityInput}
+            onChangeText={setManualCityInput}
+            autoFocus
+          />
+          <View style={styles.modalButtons}>
+            <TouchableOpacity 
+              style={styles.modalCancelButton} 
+              onPress={() => setIsLocationModalVisible(false)}
+            >
+              <Text style={styles.modalCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={styles.modalSaveButton}
+              onPress={() => {
+                if (manualCityInput.trim()) {
+                  setSelectedCity(`${manualCityInput.trim()} 📍`);
+                  setLastDoc(null);
+                  setHasMore(true);
+                }
+                setIsLocationModalVisible(false);
+              }}
+            >
+              <Text style={styles.modalSaveText}>Search Area</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
 
   return (
     <ScreenLayout>
       <View style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Discover</Text>
-        <TouchableOpacity
-          style={styles.searchIcon}
-          onPress={() => setShowTransitSearch(true)}
-        >
-          <Text style={styles.searchIconText}>🔍</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Category Filter */}
-      <CategoryFilter
-        selectedCategory={selectedCategory}
-        onSelectCategory={(category) => {
-          setSelectedCategory(category);
-          setLastDoc(null);
-          setHasMore(true);
-        }}
-      />
-
-      {/* Location Selector */}
-      <View style={styles.locationBar}>
-        <TouchableOpacity style={styles.locationButton}>
-          <Text style={styles.locationText}>{selectedCity}</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Feed List */}
-      {loading ? (
-        <View style={styles.skeletonContainer}>
-          {Array.from({ length: SKELETON_COUNT }).map((_, index) => (
-            <View key={index}>{renderSkeletonCard()}</View>
-          ))}
+        {/* Header */}
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Discover</Text>
+          <TouchableOpacity
+            style={styles.transitIcon}
+            onPress={() => setShowTransitSearch(true)}
+          >
+            <Text style={styles.transitIconText}>🚂</Text>
+          </TouchableOpacity>
         </View>
-      ) : (
-        <FlatList
-          data={circles}
-          renderItem={renderFeedCard}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.listContent}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              tintColor={Colors.primary}
-              colors={[Colors.primary]}
-            />
-          }
-          onEndReached={handleLoadMore}
-          onEndReachedThreshold={0.5}
-          ListFooterComponent={renderFooter}
-          ListEmptyComponent={renderEmptyState}
-          // Performance optimizations
-          initialNumToRender={10}
-          maxToRenderPerBatch={5}
-          windowSize={5}
-          removeClippedSubviews={true}
-          updateCellsBatchingPeriod={50}
-          getItemLayout={(data, index) => ({
-            length: 200, // Approximate height of FeedCard
-            offset: 200 * index,
-            index,
-          })}
+
+        {/* Search Bar */}
+        <View style={styles.searchContainer}>
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search circles by name or pitch..."
+            value={searchQuery}
+            onChangeText={(text) => {
+              setSearchQuery(text);
+              setLastDoc(null);
+              setHasMore(true);
+            }}
+            placeholderTextColor={Colors.textTertiary}
+          />
+        </View>
+
+        {/* Category Filter */}
+        <CategoryFilter
+          selectedCategory={selectedCategory}
+          onSelectCategory={(category) => {
+            setSelectedCategory(category);
+            setLastDoc(null);
+            setHasMore(true);
+          }}
         />
-      )}
 
-      {/* Floating Action Button */}
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => navigation.navigate('CreateOpenCircleScreen')}
-        activeOpacity={0.8}
-      >
-        <Text style={styles.fabIcon}>+</Text>
-      </TouchableOpacity>
+        {/* Location Selector */}
+        <View style={styles.locationBar}>
+          <TouchableOpacity 
+            style={styles.locationButton}
+            onPress={() => {
+              setManualCityInput(selectedCity.replace(' 📍', ''));
+              setIsLocationModalVisible(true);
+            }}
+          >
+            <Text style={styles.locationText}>{selectedCity}</Text>
+          </TouchableOpacity>
+        </View>
 
-      {/* Transit Search Bar */}
-      <TransitSearchBar
-        visible={showTransitSearch}
-        onSearch={handleTransitSearch}
-        onCancel={handleCancelTransitSearch}
-      />
-    </View>
+        {/* Transit Row (Today's trains near you) */}
+        <TransitRow userCity={selectedCity} />
+
+        {/* Feed List */}
+        {loading && circles.length === 0 ? (
+          <View style={styles.skeletonContainer}>
+            {Array.from({ length: SKELETON_COUNT }).map((_, index) => (
+              <View key={index}>{renderSkeletonCard()}</View>
+            ))}
+          </View>
+        ) : (
+          <FlatList
+            data={circles}
+            renderItem={renderFeedCard}
+            keyExtractor={(item) => item.id}
+            contentContainerStyle={styles.listContent}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                tintColor={Colors.primary}
+                colors={[Colors.primary]}
+              />
+            }
+            onEndReached={handleLoadMore}
+            onEndReachedThreshold={0.5}
+            ListFooterComponent={renderFooter}
+            ListEmptyComponent={renderEmptyState}
+            initialNumToRender={10}
+            maxToRenderPerBatch={5}
+            windowSize={5}
+            removeClippedSubviews={true}
+            updateCellsBatchingPeriod={50}
+          />
+        )}
+
+        {/* Floating Action Button */}
+        <TouchableOpacity
+          style={styles.fab}
+          onPress={() => navigation.navigate('CreateOpenCircleScreen')}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.fabIcon}>+</Text>
+        </TouchableOpacity>
+
+        {/* Transit Search Bar Modal */}
+        <TransitSearchBar
+          visible={showTransitSearch}
+          onSearch={handleTransitSearch}
+          onCancel={handleCancelTransitSearch}
+        />
+
+        {/* Location Override Modal */}
+        {renderLocationModal()}
+      </View>
     </ScreenLayout>
   );
 };
@@ -338,19 +460,34 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 16,
     backgroundColor: Colors.surface,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
   },
   headerTitle: {
     fontSize: 32,
     fontWeight: '700',
     color: Colors.textPrimary,
   },
-  searchIcon: {
+  transitIcon: {
     padding: 8,
+    backgroundColor: Colors.surfaceAlt,
+    borderRadius: 20,
   },
-  searchIconText: {
-    fontSize: 24,
+  transitIconText: {
+    fontSize: 20,
+  },
+  searchContainer: {
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    backgroundColor: Colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  searchInput: {
+    backgroundColor: Colors.surfaceAlt,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    fontSize: 16,
+    color: Colors.textPrimary,
   },
   locationBar: {
     backgroundColor: Colors.surface,
@@ -365,8 +502,8 @@ const styles = StyleSheet.create({
   },
   locationText: {
     fontSize: 15,
-    color: Colors.textSecondary,
-    fontWeight: '500',
+    color: Colors.primary,
+    fontWeight: '600',
   },
   listContent: {
     paddingTop: 16,
@@ -424,6 +561,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: Colors.textSecondary,
     marginBottom: 24,
+    textAlign: 'center',
   },
   emptyButton: {
     backgroundColor: Colors.primary,
@@ -439,6 +577,15 @@ const styles = StyleSheet.create({
   footerLoader: {
     paddingVertical: 20,
     alignItems: 'center',
+  },
+  footerTextContainer: {
+    paddingVertical: 20,
+    alignItems: 'center',
+  },
+  footerText: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    fontStyle: 'italic',
   },
   fab: {
     position: 'absolute',
@@ -460,6 +607,64 @@ const styles = StyleSheet.create({
     fontSize: 32,
     color: Colors.surface,
     fontWeight: '300',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: Colors.surface,
+    borderRadius: 16,
+    padding: 24,
+    width: '80%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    marginBottom: 16,
+    color: Colors.textPrimary,
+  },
+  modalInput: {
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    marginBottom: 24,
+    backgroundColor: Colors.surfaceAlt,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 12,
+  },
+  modalCancelButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+  },
+  modalCancelText: {
+    fontSize: 16,
+    color: Colors.textSecondary,
+    fontWeight: '600',
+  },
+  modalSaveButton: {
+    backgroundColor: Colors.primary,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+  },
+  modalSaveText: {
+    fontSize: 16,
+    color: Colors.surface,
+    fontWeight: '600',
   },
 });
 

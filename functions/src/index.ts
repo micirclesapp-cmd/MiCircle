@@ -16,6 +16,8 @@ export {
   sendPlanReminders,
   onNewTransitCircle,
   sendTestNotification,
+  onJoinRequest,
+  onJoinRequestUpdated,
 } from './sendPushNotifications';
 
 // Content moderation functions

@@ -10,10 +10,12 @@ import { Message } from '../../types/message.types';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { formatTime } from '../../utils/dateUtils';
+import { PollCard } from '../../components/chat/PollCard';
 
 interface MessageBubbleProps {
   message: Message;
   isOwn: boolean;
+  circleId?: string;
   onLongPress?: () => void;
   onReply?: () => void;
 }
@@ -60,6 +62,14 @@ export default function MessageBubble({
   onLongPress,
   onReply,
 }: MessageBubbleProps) {
+  if (message.type === 'poll' && message.pollId && circleId) {
+    return (
+      <View style={{ alignItems: 'center', width: '100%', marginVertical: 8 }}>
+        <PollCard pollId={message.pollId} circleId={circleId} />
+      </View>
+    );
+  }
+
   if (message.isSystem) {
     // System message (joined, left, etc.)
     return (
