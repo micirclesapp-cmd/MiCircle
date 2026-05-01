@@ -17,6 +17,10 @@ export default {
     ios: {
       supportsTablet: true,
       bundleIdentifier: 'com.circles.app',
+      associatedDomains: ['applinks:circles.app'],
+      infoPlist: {
+        NSLocationWhenInUseUsageDescription: 'Circles uses your location to show nearby circles and events.',
+      },
     },
     android: {
       package: 'com.circles.app',
@@ -30,11 +34,28 @@ export default {
         'READ_EXTERNAL_STORAGE',
         'WRITE_EXTERNAL_STORAGE',
         'NOTIFICATIONS',
+        'ACCESS_COARSE_LOCATION',
+        'ACCESS_FINE_LOCATION',
+      ],
+      intentFilters: [
+        {
+          action: 'VIEW',
+          autoVerify: true,
+          data: [
+            {
+              scheme: 'https',
+              host: 'circles.app',
+              pathPrefix: '/open',
+            },
+          ],
+          category: ['BROWSABLE', 'DEFAULT'],
+        },
       ],
     },
     web: {
       favicon: './assets/favicon.png',
     },
+    scheme: 'circles',
     plugins: [
       [
         'expo-notifications',

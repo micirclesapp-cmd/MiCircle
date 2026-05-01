@@ -80,7 +80,7 @@ export default function CreateCircleStep1({
   };
 
   const handleTaglineChange = (text: string) => {
-    if (text.length <= 60) {
+    if (text.length <= 80) {
       setTagline(text);
     }
   };
@@ -232,7 +232,7 @@ export default function CreateCircleStep1({
           placeholderTextColor={Colors.textTertiary}
           value={tagline}
           onChangeText={handleTaglineChange}
-          maxLength={60}
+          maxLength={80}
           style={{
             fontSize: Typography.fontSize.md,
             color: Colors.textPrimary,
@@ -253,7 +253,7 @@ export default function CreateCircleStep1({
             marginBottom: 40,
           }}
         >
-          {tagline.length}/60
+          {tagline.length}/80
         </Text>
       </ScrollView>
 

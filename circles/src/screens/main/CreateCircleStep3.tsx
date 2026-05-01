@@ -8,9 +8,10 @@ import {
   ActivityIndicator,
   Alert,
 } from 'react-native';
-import { doc, setDoc, collection, getDoc } from 'firebase/firestore';
+import { doc, setDoc, collection, getDoc, query, where, getDocs } from 'firebase/firestore';
 import { auth, firestore } from '../../services/firebase';
-import { generateInviteToken } from '../../utils/inviteToken';
+import { generateUniqueInviteToken } from '../../utils/inviteToken';
+import { uploadCirclePhotoToFirebase } from '../../utils/circlePhotoUploadUtils';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { PrivateCircle } from '../../types/circle.types';
@@ -33,10 +34,22 @@ const PHOTO_PRESETS = [
   { id: 'preset-4', bgColor: '#34495E', icon: '🏙️' },
   { id: 'preset-5', bgColor: '#0F1419', icon: '🌌' },
   { id: 'preset-6', bgColor: '#FF69B4', icon: '🌸' },
+  { id: 'preset-7', bgColor: '#1E90FF', icon: '🌊' },
+  { id: 'preset-8', bgColor: '#DAA520', icon: '🏜️' },
+  { id: 'preset-9', bgColor: '#00CED1', icon: '🌌' },
+  { id: 'preset-10', bgColor: '#FF6347', icon: '🌅' },
+  { id: 'preset-11', bgColor: '#F0F8FF', icon: '❄️' },
+  { id: 'preset-12', bgColor: '#32CD32', icon: '🌴' },
 ];
 
 /**
  * CreateCircleStep3 - Review and create circle
+ * 
+ * This is the final step that:
+ * 1. Shows a review of circle details
+ * 2. Checks free tier limit (max 1 active circle)
+ * 3. Generates unique invite token with collision detection
+ * 4. Writes to Firestore
  */
 export default function CreateCircleStep3({
   circleData,
@@ -57,7 +70,164 @@ export default function CreateCircleStep3({
     return preset?.icon || '👥';
   };
 
+  /**
+   * Check if user has reached free tier circle limit
+   * Free users: max 1 active circle
+   * Circles+ users: unlimited
+   */
+  const checkFreeTierLimit = async (uid: string): Promise<boolean> => {
+    try {
+      // Get user subscription
+      const userDocRef = doc(firestore, 'users', uid);
+      const userSnap = await getDoc(userDocRef);
+      
+      if (!userSnap.exists()) {
+        return true; // Allow creation if user not found
+      }
+
+      const subscription = userSnap.data()?.subscription || 'free';
+      
+      // Circles+ users have unlimited circles
+      if (subscription === 'circles+' || subscription === 'premium') {
+        return true; // No limit
+      }
+
+      // Free users: check if they already have 1 circle
+      const circlesRef = collection(firestore, 'circles');
+      const q = query(
+        circlesRef,
+        where('createdBy', '==', uid),
+        where('isArchived', '==', false)
+      );
+      const snapshot = await getDocs(q);
+      
+      // If they have 0 circles, allow creation
+      // If they have 1 or more, block
+      return snapshot.size === 0;
+    } catch (error) {
+      console.error('Error checking free tier limit:', error);
+      // On error, allow creation (don't block due to temporary issues)
+      return true;
+    }
+  };
+
   const handleCreateCircle = async () => {
+    try {
+      setLoading(true);
+
+      const currentUser = auth.currentUser;
+      if (!currentUser) {
+        Alert.alert('Error', 'You must be logged in');
+        setLoading(false);
+        return;
+      }
+
+      // Check free tier limit
+      const canCreate = await checkFreeTierLimit(currentUser.uid);
+      if (!canCreate) {
+        Alert.alert(
+          'Limit Reached',
+          'Free users can create up to 1 circle. Upgrade to Circles+ for unlimited circles.',
+          [
+            {
+              text: 'Upgrade',
+              onPress: () => {
+                // Navigate to upgrade screen in future
+              },
+            },
+            {
+              text: 'Cancel',
+              onPress: () => setLoading(false),
+            },
+          ]
+        );
+        return;
+      }
+
+      // Get user info from Firestore
+      const userDocRef = doc(firestore, 'users', currentUser.uid);
+      const userSnap = await getDoc(userDocRef);
+
+      if (!userSnap.exists()) {
+        console.error('User profile not found for uid:', currentUser.uid);
+        Alert.alert(
+          'Error',
+          'User profile not found. Please complete your profile setup first.'
+        );
+        setLoading(false);
+        return;
+      }
+
+      const userData = userSnap.data();
+
+      // Validate user data
+      if (!userData.displayName) {
+        console.error('User displayName missing');
+        Alert.alert(
+          'Error',
+          'Please complete your profile setup before creating a circle.'
+        );
+        setLoading(false);
+        return;
+      }
+
+      // Generate unique invite token (with collision detection)
+      const inviteToken = await generateUniqueInviteToken();
+
+      // Create circle document
+      const now = Date.now();
+      const circleId = doc(collection(firestore, 'circles')).id;
+
+      const circleDoc: PrivateCircle = {
+        id: circleId,
+        name: circleData.name,
+        tagline: circleData.tagline,
+        type: circleData.type,
+        photoUrl: circleData.photoUrl || 'preset-1',
+        creatorUid: currentUser.uid,
+        members: [
+          {
+            uid: currentUser.uid,
+            displayName: userData.displayName || 'Unknown',
+            avatarUrl: userData.avatarUrl || '',
+            role: 'admin',
+            joinedAt: now,
+          },
+        ],
+        inviteToken,
+        createdAt: now,
+        isArchived: false,
+        lastMessageAt: now,
+        lastMessagePreview: `${userData.displayName || 'Admin'} created this circle`,
+      };
+
+      // Write to Firestore
+      console.log('Creating circle:', circleId);
+      await setDoc(doc(firestore, 'circles', circleId), circleDoc);
+      console.log('Circle created successfully');
+
+      setLoading(false);
+      onSuccess(circleId);
+    } catch (error: any) {
+      console.error('Error creating circle:', error);
+      console.error('Error code:', error.code);
+      console.error('Error message:', error.message);
+      
+      let errorMessage = 'Failed to create circle. Please try again.';
+      
+      // Provide more specific error messages
+      if (error.code === 'permission-denied') {
+        errorMessage = 'Permission denied. Please check your Firestore security rules.';
+      } else if (error.code === 'unavailable') {
+        errorMessage = 'Network error. Please check your internet connection.';
+      } else if (error.message) {
+        errorMessage = `Error: ${error.message}`;
+      }
+      
+      Alert.alert('Error', errorMessage);
+      setLoading(false);
+    }
+  };
     try {
       setLoading(true);
 

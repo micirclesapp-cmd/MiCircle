@@ -12,6 +12,7 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import * as Location from 'expo-location';
 import { firestore, auth } from '../../services/firebase';
 import { Colors } from '../../constants/colors';
 import type { CircleCategory, TransitMode, JoinMode } from '../../types/feed.types';
@@ -91,7 +92,64 @@ export const CreateOpenCircleScreen: React.FC = () => {
     setPublishing(true);
 
     try {
-      // Run content moderation check
+      // 1. Check bot detection (new accounts < 24h old)
+      const { checkBotDetection } = await import('../../services/circle.service');
+      const botCheck = await checkBotDetection(currentUser.uid);
+      
+      if (botCheck.isBot) {
+        if (botCheck.needsVerification) {
+          Alert.alert(
+            'Email Verification Required',
+            botCheck.reason || 'Please verify your email before posting.',
+            [
+              {
+                text: 'Resend Verification Email',
+                onPress: async () => {
+                  try {
+                    await currentUser.sendEmailVerification();
+                    Alert.alert('Email Sent', 'Please check your inbox and verify your email.');
+                  } catch (error) {
+                    console.error('Error sending verification email:', error);
+                    Alert.alert('Error', 'Failed to send verification email. Please try again.');
+                  }
+                },
+              },
+              { text: 'OK', style: 'cancel' },
+            ]
+          );
+        } else {
+          Alert.alert('Account Verification Required', botCheck.reason || 'Your account needs verification.');
+        }
+        setPublishing(false);
+        return;
+      }
+
+      // 2. Check spam throttle (3 circles per 24h limit)
+      const { checkSpamThrottle } = await import('../../services/circle.service');
+      const throttleCheck = await checkSpamThrottle(currentUser.uid);
+      
+      if (throttleCheck.isThrottled) {
+        Alert.alert('Posting Limit Reached', throttleCheck.reason || 'You can only post 3 circles per 24 hours.');
+        setPublishing(false);
+        return;
+      }
+
+      // 3. Check for duplicate content
+      const { checkDuplicateCircle } = await import('../../services/circle.service');
+      const duplicateCheck = await checkDuplicateCircle(
+        currentUser.uid,
+        name,
+        pitch,
+        tags
+      );
+      
+      if (duplicateCheck.isDuplicate) {
+        Alert.alert('Duplicate Content', duplicateCheck.reason || 'You recently posted similar content.');
+        setPublishing(false);
+        return;
+      }
+
+      // 4. Run content moderation check
       const { checkContent, getModerationErrorMessage } = await import('../../services/moderation.service');
       
       // Check circle name
@@ -110,8 +168,6 @@ export const CreateOpenCircleScreen: React.FC = () => {
         return;
       }
 
-      // Check user's active circle count (TODO: implement this check)
-
       // Prepare circle data
       const circleData: any = {
         name,
@@ -125,6 +181,13 @@ export const CreateOpenCircleScreen: React.FC = () => {
         creatorJoinYear: new Date().getFullYear(),
         memberCount: 1,
         members: [currentUser.uid],
+        memberJoinTimestamps: [
+          {
+            uid: currentUser.uid,
+            timestamp: Date.now(),
+          },
+        ],
+        joinVelocity: 0, // Will be calculated by Cloud Function
         joinRequests: [],
         createdAt: Date.now(),
         isArchived: false,
@@ -137,9 +200,23 @@ export const CreateOpenCircleScreen: React.FC = () => {
         circleData.transitRoute = transitRoute;
         circleData.transitDate = transitDate;
       } else {
-        // Add location fields
+        // Add location fields with geocoding
         circleData.city = city;
         circleData.location = neighbourhood ? `${neighbourhood}, ${city}` : city;
+        
+        // Try to get GPS coordinates for location-based ranking
+        try {
+          const geocoded = await Location.geocodeAsync(`${neighbourhood || ''} ${city}`);
+          if (geocoded && geocoded.length > 0) {
+            circleData.geoLocation = {
+              latitude: geocoded[0].latitude,
+              longitude: geocoded[0].longitude,
+            };
+            console.log('Geocoded location:', circleData.geoLocation);
+          }
+        } catch (geocodeError) {
+          console.warn('Geocoding failed, circle will not have geoLocation:', geocodeError);
+        }
       }
 
       // Write to Firestore

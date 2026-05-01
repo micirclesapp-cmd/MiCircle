@@ -8,14 +8,16 @@ import {
   Image,
   ActivityIndicator,
   Alert,
+  Share,
 } from 'react-native';
 import { useRoute, RouteProp, useNavigation } from '@react-navigation/native';
-import { doc, onSnapshot, updateDoc, arrayRemove } from 'firebase/firestore';
+import { doc, onSnapshot, updateDoc, arrayRemove, arrayUnion, increment } from 'firebase/firestore';
 import { firestore, auth } from '../../services/firebase';
 import { Colors } from '../../constants/colors';
 import type { OpenCircle } from '../../types/feed.types';
 import { TransitBookingBanner } from '../../components/feed/TransitBookingBanner';
 import { SimpleChatView } from '../../components/chat/SimpleChatView';
+import { trackCircleJoin } from '../../services/analytics.service';
 
 type FeedStackParamList = {
   OpenCircleDetailScreen: { circleId: string };
@@ -84,7 +86,6 @@ export const OpenCircleDetailScreen: React.FC = () => {
       
       if (circle.joinMode === 'approval') {
         // Request to join - add to joinRequests array
-        const { arrayUnion } = await import('firebase/firestore');
         await updateDoc(circleRef, {
           joinRequests: arrayUnion(currentUserUid),
         });
@@ -94,11 +95,19 @@ export const OpenCircleDetailScreen: React.FC = () => {
         );
       } else {
         // Open circle - join immediately
-        const { arrayUnion } = await import('firebase/firestore');
         await updateDoc(circleRef, {
           members: arrayUnion(currentUserUid),
-          memberCount: circle.memberCount + 1,
+          memberCount: increment(1),
+          // Track join timestamp for velocity calculation
+          memberJoinTimestamps: arrayUnion({
+            uid: currentUserUid,
+            timestamp: Date.now(),
+          }),
         });
+        
+        // Track join for category affinity
+        await trackCircleJoin(circleId, 'open', circle.category);
+        
         Alert.alert('Success', 'You\'ve joined the circle! 🎉');
       }
     } catch (error) {
@@ -134,6 +143,22 @@ export const OpenCircleDetailScreen: React.FC = () => {
         },
       ]
     );
+  };
+
+  const handleShare = async () => {
+    if (!circle) return;
+
+    const shareUrl = `https://circles.app/open/${circleId}`;
+    const shareMessage = `Check out this circle on Circles!\n\n${circle.name}\n${circle.pitch}\n\nJoin here: ${shareUrl}`;
+
+    try {
+      await Share.share({
+        message: shareMessage,
+        title: `Join ${circle.name}`,
+      });
+    } catch (error) {
+      console.error('Share error:', error);
+    }
   };
 
   const getTransitCountdown = () => {
@@ -336,8 +361,18 @@ export const OpenCircleDetailScreen: React.FC = () => {
             </View>
           </View>
           {isMember && (
-            <TouchableOpacity style={styles.menuButton} onPress={handleLeave}>
-              <Text style={styles.menuIcon}>⋮</Text>
+            <View style={styles.headerActions}>
+              <TouchableOpacity style={styles.menuButton} onPress={handleShare}>
+                <Text style={styles.menuIcon}>↗️</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.menuButton} onPress={handleLeave}>
+                <Text style={styles.menuIcon}>⋮</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+          {!isMember && (
+            <TouchableOpacity style={styles.menuButton} onPress={handleShare}>
+              <Text style={styles.menuIcon}>↗️</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -414,6 +449,10 @@ const styles = StyleSheet.create({
   },
   headerLeft: {
     flex: 1,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    gap: 8,
   },
   circleName: {
     fontSize: 20,

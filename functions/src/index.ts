@@ -25,5 +25,11 @@ export {
   cleanupOldReports,
 } from './moderationFunctions';
 
+// Reporter notification functions
+export {
+  notifyReporters,
+  onReportStatusChange,
+} from './notifyReporters';
+
 // Add more function exports here as needed
 // export { functionName } from './functionFile';

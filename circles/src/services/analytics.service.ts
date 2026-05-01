@@ -1,4 +1,4 @@
-import { doc, setDoc, serverTimestamp, increment, updateDoc } from 'firebase/firestore';
+import { doc, setDoc, serverTimestamp, increment, updateDoc, arrayUnion } from 'firebase/firestore';
 import { firestore, auth } from './firebase';
 
 /**
@@ -296,5 +296,111 @@ export const trackScreenView = async (screenName: string): Promise<void> => {
     console.log('Screen view tracked:', screenName);
   } catch (error) {
     console.error('Error tracking screen view:', error);
+  }
+};
+
+/**
+ * Track circle join (for category affinity)
+ */
+export const trackCircleJoin = async (
+  circleId: string,
+  circleType: 'private' | 'open',
+  category: string
+): Promise<void> => {
+  try {
+    const userId = auth.currentUser?.uid;
+    if (!userId) return;
+
+    await setDoc(
+      doc(firestore, `analytics/circleJoins/${circleId}_${userId}`),
+      {
+        circleId,
+        userId,
+        circleType,
+        category,
+        timestamp: serverTimestamp(),
+      }
+    );
+
+    // Update user preferences
+    await updateUserCategoryAffinity(userId, category);
+
+    console.log('Circle join tracked:', circleId, category);
+  } catch (error) {
+    console.error('Error tracking circle join:', error);
+  }
+};
+
+/**
+ * Update user category affinity
+ */
+const updateUserCategoryAffinity = async (
+  userId: string,
+  category: string
+): Promise<void> => {
+  try {
+    const prefsRef = doc(firestore, `userPreferences/${userId}`);
+    
+    // Increment category affinity score
+    await updateDoc(prefsRef, {
+      [`categoryAffinity.${category}`]: increment(0.1),
+      lastUpdated: serverTimestamp(),
+    });
+  } catch (error) {
+    // If document doesn't exist, create it
+    if (error.code === 'not-found') {
+      await setDoc(prefsRef, {
+        uid: userId,
+        categoryAffinity: {
+          travel: category === 'travel' ? 0.1 : 0,
+          fitness: category === 'fitness' ? 0.1 : 0,
+          music: category === 'music' ? 0.1 : 0,
+          food: category === 'food' ? 0.1 : 0,
+          hobby: category === 'hobby' ? 0.1 : 0,
+          neighbourhood: category === 'neighbourhood' ? 0.1 : 0,
+          professional: category === 'professional' ? 0.1 : 0,
+          other: category === 'other' ? 0.1 : 0,
+        },
+        lastUpdated: serverTimestamp(),
+      });
+    }
+  }
+};
+
+/**
+ * Track transit search (for travel context)
+ */
+export const trackTransitSearch = async (
+  transitRoute: string,
+  transitDate: string
+): Promise<void> => {
+  try {
+    const userId = auth.currentUser?.uid;
+    if (!userId) return;
+
+    await setDoc(
+      doc(firestore, `analytics/transitSearches/${userId}_${Date.now()}`),
+      {
+        userId,
+        transitRoute,
+        transitDate,
+        timestamp: serverTimestamp(),
+      }
+    );
+
+    // Update user preferences with recent search
+    const prefsRef = doc(firestore, `userPreferences/${userId}`);
+    await updateDoc(prefsRef, {
+      recentSearches: arrayUnion({
+        transitRoute,
+        transitDate,
+        timestamp: Date.now(),
+      }),
+      lastUpdated: serverTimestamp(),
+    });
+
+    console.log('Transit search tracked:', transitRoute, transitDate);
+  } catch (error) {
+    console.error('Error tracking transit search:', error);
   }
 };

@@ -55,6 +55,8 @@ export default function DisplayNameScreen({ navigation }: any) {
   const handleContinue = () => {
     if (displayName.trim().length < 2) return;
     setDisplayNameToStore(displayName.trim());
+    const setLastCompletedStep = useAuthStore((state) => state.setLastCompletedStep);
+    setLastCompletedStep('displayName');
     navigation.navigate(Routes.AVATAR);
   };
 
@@ -72,7 +74,7 @@ export default function DisplayNameScreen({ navigation }: any) {
       >
         {/* Progress Indicator */}
         <View style={{ marginTop: 32, marginBottom: 40 }}>
-          <ProgressDots current={1} total={3} />
+          <ProgressDots current={1} total={4} />
         </View>
 
         {/* Heading */}

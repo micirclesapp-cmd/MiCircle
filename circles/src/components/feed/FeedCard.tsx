@@ -7,12 +7,14 @@ import {
   Image,
   ScrollView,
   Alert,
+  Share,
 } from 'react-native';
 import { doc, updateDoc, arrayUnion, increment, addDoc, collection, query, where, getDocs, Timestamp } from 'firebase/firestore';
 import { firestore, auth } from '../../services/firebase';
 import { Colors } from '../../constants/colors';
 import type { OpenCircle } from '../../types/feed.types';
 import { TransitBookingBanner } from './TransitBookingBanner';
+import { trackCircleJoin } from '../../services/analytics.service';
 
 interface FeedCardProps {
   circle: OpenCircle;
@@ -85,7 +87,16 @@ export const FeedCard: React.FC<FeedCardProps> = ({ circle, onJoin, onReport }) 
         await updateDoc(circleRef, {
           members: arrayUnion(currentUserUid),
           memberCount: increment(1),
+          // Track join timestamp for velocity calculation
+          memberJoinTimestamps: arrayUnion({
+            uid: currentUserUid,
+            timestamp: Date.now(),
+          }),
         });
+        
+        // Track join for category affinity
+        await trackCircleJoin(circle.id, 'open', circle.category);
+        
         Alert.alert('Joined!', `You're now part of ${circle.name}`);
       } else {
         // Add to join requests
@@ -140,6 +151,20 @@ export const FeedCard: React.FC<FeedCardProps> = ({ circle, onJoin, onReport }) 
     } catch (error) {
       console.error('Error reporting card:', error);
       Alert.alert('Error', 'Failed to submit report. Please try again.');
+    }
+  };
+
+  const handleShare = async () => {
+    const shareUrl = `https://circles.app/open/${circle.id}`;
+    const shareMessage = `Check out this circle on Circles!\n\n${circle.name}\n${circle.pitch}\n\nJoin here: ${shareUrl}`;
+
+    try {
+      await Share.share({
+        message: shareMessage,
+        title: `Join ${circle.name}`,
+      });
+    } catch (error) {
+      console.error('Share error:', error);
     }
   };
 
@@ -272,15 +297,25 @@ export const FeedCard: React.FC<FeedCardProps> = ({ circle, onJoin, onReport }) 
           </ScrollView>
         )}
 
-        {/* Bottom Row: Report + Join Button */}
+        {/* Bottom Row: Share + Report + Join Button */}
         <View style={styles.bottomRow}>
-          <TouchableOpacity
-            style={styles.reportButton}
-            onPress={() => setShowReportSheet(true)}
-          >
-            <Text style={styles.reportIcon}>⚠</Text>
-            <Text style={styles.reportText}>Report</Text>
-          </TouchableOpacity>
+          <View style={styles.leftActions}>
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={handleShare}
+            >
+              <Text style={styles.actionIcon}>↗️</Text>
+              <Text style={styles.actionText}>Share</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={() => setShowReportSheet(true)}
+            >
+              <Text style={styles.actionIcon}>⚠</Text>
+              <Text style={styles.actionText}>Report</Text>
+            </TouchableOpacity>
+          </View>
 
           <TouchableOpacity
             style={[
@@ -422,16 +457,20 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  reportButton: {
+  leftActions: {
+    flexDirection: 'row',
+    gap: 16,
+  },
+  actionButton: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
   },
-  reportIcon: {
+  actionIcon: {
     fontSize: 14,
     color: Colors.textTertiary,
   },
-  reportText: {
+  actionText: {
     fontSize: 13,
     color: Colors.textTertiary,
   },

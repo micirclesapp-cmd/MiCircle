@@ -39,11 +39,24 @@
         {
           "sounds": []
         }
+      ],
+      [
+        "@react-native-google-signin/google-signin",
+        {
+          "iosClientId": "YOUR_IOS_CLIENT_ID.apps.googleusercontent.com",
+          "androidClientId": "YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com",
+          "webClientId": "YOUR_WEB_CLIENT_ID.apps.googleusercontent.com"
+        }
       ]
     ],
     "extra": {
       "eas": {
         "projectId": "7b264cec-5bda-4d35-81b6-476a157e294a"
+      },
+      "googleClientIds": {
+        "ios": "YOUR_IOS_CLIENT_ID.apps.googleusercontent.com",
+        "android": "YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com",
+        "web": "YOUR_WEB_CLIENT_ID.apps.googleusercontent.com"
       }
     },
     "owner": "srikanthsriram"

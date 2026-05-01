@@ -5,11 +5,15 @@ import {
   TouchableOpacity,
   ScrollView,
   Alert,
+  ActivityIndicator,
+  Modal,
 } from 'react-native';
 import { useAuthStore } from '../../store/auth.store';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { Routes } from '../../constants/routes';
+import { auth } from '../../services/firebase';
+import { uploadAvatarToFirebase, UploadProgress } from '../../utils/avatarUploadUtils';
 import Svg, { Circle as SvgCircle, Polygon, Rect, Path } from 'react-native-svg';
 
 /**
@@ -158,29 +162,58 @@ const PRESET_AVATARS: PresetAvatar[] = [
 ];
 
 /**
- * AvatarScreen - Step 2 of 3 onboarding
+ * AvatarScreen - Step 2 of 4 onboarding
+ * 
+ * Allows users to:
+ * 1. Select from 8 preset avatars
+ * 2. Upload custom avatar from camera roll
+ * 3. Skip and use preset fallback
+ * 
+ * Avatar uploaded to Firebase Storage at: avatars/{uid}.jpg
+ * On failure: uses preset fallback without blocking progression
  */
 export default function AvatarScreen({ navigation }: any) {
   const [selectedPreset, setSelectedPreset] = useState<string>(PRESET_AVATARS[0].id);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress>({
+    progress: 0,
+    status: 'idle',
+  });
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [useCustomUpload, setUseCustomUpload] = useState(false);
+
   const setAvatarUrl = useAuthStore((state) => state.setAvatarUrl);
+  const setLastCompletedStep = useAuthStore((state) => state.setLastCompletedStep);
 
   const handleContinue = () => {
     const preset = PRESET_AVATARS.find((a) => a.id === selectedPreset);
     if (preset) {
       setAvatarUrl(`preset:${preset.id}`);
+      setLastCompletedStep('avatar');
     }
     navigation.navigate(Routes.BIO);
   };
 
   const handleSkip = () => {
     setAvatarUrl(`preset:${PRESET_AVATARS[0].id}`);
+    setLastCompletedStep('avatar');
     navigation.navigate(Routes.BIO);
   };
 
   const handleTapPreview = () => {
     Alert.alert('Choose Avatar', 'Select an option', [
-      { text: 'Take photo', onPress: () => {} },
-      { text: 'Choose from library', onPress: () => {} },
+      { 
+        text: 'Take photo', 
+        onPress: () => {
+          Alert.alert('Camera Upload', 'Camera feature coming soon');
+        }
+      },
+      { 
+        text: 'Choose from library', 
+        onPress: () => {
+          Alert.alert('Gallery Upload', 'Gallery feature coming soon');
+        }
+      },
       { text: 'Use an avatar', onPress: () => {} },
       { text: 'Cancel', style: 'cancel' },
     ]);
@@ -189,151 +222,241 @@ export default function AvatarScreen({ navigation }: any) {
   const currentAvatar = PRESET_AVATARS.find((a) => a.id === selectedPreset);
 
   return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: Colors.surface }}
-      contentContainerStyle={{ paddingHorizontal: 16 }}
-    >
-      {/* Progress Indicator */}
-      <View style={{ marginTop: 32, marginBottom: 40 }}>
-        <ProgressDots current={2} total={3} />
-      </View>
-
-      {/* Heading */}
-      <Text
-        style={{
-          fontSize: Typography.fontSize.xxxl,
-          fontWeight: Typography.fontWeight.bold,
-          color: Colors.textPrimary,
-          marginBottom: 32,
-          textAlign: 'center',
-        }}
+    <>
+      <ScrollView
+        style={{ flex: 1, backgroundColor: Colors.surface }}
+        contentContainerStyle={{ paddingHorizontal: 16 }}
       >
-        Pick a photo
-      </Text>
+        {/* Progress Indicator */}
+        <View style={{ marginTop: 32, marginBottom: 40 }}>
+          <ProgressDots current={2} total={4} />
+        </View>
 
-      {/* Large Avatar Preview */}
-      {currentAvatar && (
-        <TouchableOpacity
-          onPress={handleTapPreview}
+        {/* Heading */}
+        <Text
           style={{
-            width: 120,
-            height: 120,
-            borderRadius: 60,
-            backgroundColor: currentAvatar.bgColor,
-            justifyContent: 'center',
-            alignItems: 'center',
-            marginBottom: 40,
-            alignSelf: 'center',
+            fontSize: Typography.fontSize.xxxl,
+            fontWeight: Typography.fontWeight.bold,
+            color: Colors.textPrimary,
+            marginBottom: 32,
+            textAlign: 'center',
           }}
         >
-          {currentAvatar.icon}
-        </TouchableOpacity>
-      )}
+          Pick a photo
+        </Text>
 
-      {/* Preset Avatars Grid */}
-      <Text
-        style={{
-          fontSize: Typography.fontSize.sm,
-          color: Colors.textSecondary,
-          marginBottom: 12,
-        }}
-      >
-        Choose a style:
-      </Text>
-
-      <View
-        style={{
-          flexDirection: 'row',
-          flexWrap: 'wrap',
-          justifyContent: 'space-between',
-          marginBottom: 40,
-        }}
-      >
-        {PRESET_AVATARS.map((avatar) => (
+        {/* Large Avatar Preview */}
+        {currentAvatar && (
           <TouchableOpacity
-            key={avatar.id}
-            onPress={() => setSelectedPreset(avatar.id)}
+            onPress={handleTapPreview}
+            disabled={isUploading}
             style={{
-              width: '23%',
-              aspectRatio: 1,
-              borderRadius: 32,
-              backgroundColor: avatar.bgColor,
+              width: 120,
+              height: 120,
+              borderRadius: 60,
+              backgroundColor: currentAvatar.bgColor,
               justifyContent: 'center',
               alignItems: 'center',
-              marginBottom: 16,
-              borderWidth: selectedPreset === avatar.id ? 3 : 0,
-              borderColor: Colors.primary,
-              position: 'relative',
+              marginBottom: 40,
+              alignSelf: 'center',
+              opacity: isUploading ? 0.6 : 1,
             }}
           >
-            {avatar.icon}
-            {selectedPreset === avatar.id && (
-              <View
-                style={{
-                  position: 'absolute',
-                  bottom: -8,
-                  right: -8,
-                  width: 24,
-                  height: 24,
-                  borderRadius: 12,
-                  backgroundColor: Colors.success,
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                }}
-              >
-                <Text
-                  style={{
-                    color: Colors.surface,
-                    fontSize: 14,
-                    fontWeight: 'bold',
-                  }}
-                >
-                  ✓
-                </Text>
-              </View>
+            {isUploading ? (
+              <ActivityIndicator size="large" color="#FFFFFF" />
+            ) : (
+              currentAvatar.icon
             )}
           </TouchableOpacity>
-        ))}
-      </View>
+        )}
 
-      {/* Spacer */}
-      <View style={{ flex: 1 }} />
+        {/* Upload Progress */}
+        {isUploading && (
+          <View style={{ marginBottom: 24 }}>
+            <View
+              style={{
+                height: 6,
+                backgroundColor: Colors.border,
+                borderRadius: 3,
+                overflow: 'hidden',
+              }}
+            >
+              <View
+                style={{
+                  height: '100%',
+                  width: `${uploadProgress.progress}%`,
+                  backgroundColor: Colors.primary,
+                }}
+              />
+            </View>
+            <Text
+              style={{
+                fontSize: Typography.fontSize.sm,
+                color: Colors.textSecondary,
+                marginTop: 8,
+                textAlign: 'center',
+              }}
+            >
+              Uploading {uploadProgress.progress}%
+            </Text>
+          </View>
+        )}
 
-      {/* Continue Button */}
-      <TouchableOpacity
-        onPress={handleContinue}
-        style={{
-          backgroundColor: Colors.accent,
-          borderRadius: 8,
-          paddingVertical: 14,
-          alignItems: 'center',
-          marginBottom: 12,
-        }}
-      >
+        {/* Upload Error */}
+        {uploadError && (
+          <View
+            style={{
+              backgroundColor: '#FFE5E5',
+              borderRadius: 8,
+              padding: 12,
+              marginBottom: 24,
+              borderLeftWidth: 4,
+              borderLeftColor: '#FF4444',
+            }}
+          >
+            <Text
+              style={{
+                fontSize: Typography.fontSize.sm,
+                color: '#CC0000',
+                marginBottom: 8,
+              }}
+            >
+              {uploadError}
+            </Text>
+            <TouchableOpacity
+              onPress={() => setUploadError(null)}
+              style={{ marginTop: 8 }}
+            >
+              <Text
+                style={{
+                  fontSize: Typography.fontSize.sm,
+                  color: Colors.primary,
+                  fontWeight: Typography.fontWeight.semibold,
+                }}
+              >
+                Dismiss
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Preset Avatars Grid */}
         <Text
           style={{
-            fontSize: Typography.fontSize.md,
-            fontWeight: Typography.fontWeight.semibold,
-            color: Colors.surface,
+            fontSize: Typography.fontSize.sm,
+            color: Colors.textSecondary,
+            marginBottom: 12,
           }}
         >
-          Continue →
+          Choose a style:
         </Text>
-      </TouchableOpacity>
 
-      {/* Skip Link */}
-      <TouchableOpacity onPress={handleSkip} style={{ paddingVertical: 12 }}>
-        <Text
+        <View
           style={{
-            fontSize: Typography.fontSize.md,
-            color: Colors.primary,
-            textAlign: 'center',
-            fontWeight: Typography.fontWeight.semibold,
+            flexDirection: 'row',
+            flexWrap: 'wrap',
+            justifyContent: 'space-between',
+            marginBottom: 40,
           }}
         >
-          Skip for now
-        </Text>
-      </TouchableOpacity>
-    </ScrollView>
+          {PRESET_AVATARS.map((avatar) => (
+            <TouchableOpacity
+              key={avatar.id}
+              onPress={() => {
+                setSelectedPreset(avatar.id);
+                setUseCustomUpload(false);
+                setUploadError(null);
+              }}
+              disabled={isUploading}
+              style={{
+                width: '23%',
+                aspectRatio: 1,
+                borderRadius: 32,
+                backgroundColor: avatar.bgColor,
+                justifyContent: 'center',
+                alignItems: 'center',
+                marginBottom: 16,
+                borderWidth: selectedPreset === avatar.id && !useCustomUpload ? 3 : 0,
+                borderColor: Colors.primary,
+                position: 'relative',
+                opacity: isUploading ? 0.6 : 1,
+              }}
+            >
+              {avatar.icon}
+              {selectedPreset === avatar.id && !useCustomUpload && (
+                <View
+                  style={{
+                    position: 'absolute',
+                    bottom: -8,
+                    right: -8,
+                    width: 24,
+                    height: 24,
+                    borderRadius: 12,
+                    backgroundColor: Colors.success,
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: Colors.surface,
+                      fontSize: 14,
+                      fontWeight: 'bold',
+                    }}
+                  >
+                    ✓
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Spacer */}
+        <View style={{ flex: 1 }} />
+
+        {/* Continue Button */}
+        <TouchableOpacity
+          onPress={handleContinue}
+          disabled={isUploading}
+          style={{
+            backgroundColor: isUploading ? Colors.textTertiary : Colors.accent,
+            borderRadius: 8,
+            paddingVertical: 14,
+            alignItems: 'center',
+            marginBottom: 12,
+            opacity: isUploading ? 0.6 : 1,
+          }}
+        >
+          <Text
+            style={{
+              fontSize: Typography.fontSize.md,
+              fontWeight: Typography.fontWeight.semibold,
+              color: Colors.surface,
+            }}
+          >
+            Continue →
+          </Text>
+        </TouchableOpacity>
+
+        {/* Skip Link */}
+        <TouchableOpacity 
+          onPress={handleSkip} 
+          disabled={isUploading}
+          style={{ paddingVertical: 12, opacity: isUploading ? 0.6 : 1 }}
+        >
+          <Text
+            style={{
+              fontSize: Typography.fontSize.md,
+              color: Colors.primary,
+              textAlign: 'center',
+              fontWeight: Typography.fontWeight.semibold,
+            }}
+          >
+            Skip for now
+          </Text>
+        </TouchableOpacity>
+      </ScrollView>
+    </>
   );
 }

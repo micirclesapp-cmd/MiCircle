@@ -342,3 +342,94 @@ export const hasUnsafeContent = (results: ModerationResult[]): boolean => {
 export const getWorstScore = (results: ModerationResult[]): number => {
   return Math.max(...results.map((result) => result.score));
 };
+
+/**
+ * Generate content hash for duplicate detection
+ * 
+ * @param name - Circle name
+ * @param pitch - Circle pitch
+ * @param tags - Circle tags
+ * @returns Hash string
+ */
+export const generateContentHash = (
+  name: string,
+  pitch: string,
+  tags: string[]
+): string => {
+  // Normalize text: lowercase, remove extra spaces, remove punctuation
+  const normalize = (text: string) =>
+    text
+      .toLowerCase()
+      .replace(/[^\w\s]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const normalizedName = normalize(name);
+  const normalizedPitch = normalize(pitch);
+  const normalizedTags = tags.map(normalize).sort().join(',');
+
+  // Simple hash: combine normalized strings
+  const combined = `${normalizedName}|${normalizedPitch}|${normalizedTags}`;
+  
+  // Create a simple hash (for production, use crypto.subtle.digest)
+  let hash = 0;
+  for (let i = 0; i < combined.length; i++) {
+    const char = combined.charCodeAt(i);
+    hash = (hash << 5) - hash + char;
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  
+  return Math.abs(hash).toString(36);
+};
+
+/**
+ * Calculate similarity between two strings using Levenshtein distance
+ * 
+ * @param str1 - First string
+ * @param str2 - Second string
+ * @returns Similarity score (0-1, where 1 is identical)
+ */
+export const calculateSimilarity = (str1: string, str2: string): number => {
+  const normalize = (text: string) =>
+    text
+      .toLowerCase()
+      .replace(/[^\w\s]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const s1 = normalize(str1);
+  const s2 = normalize(str2);
+
+  if (s1 === s2) return 1;
+  if (s1.length === 0 || s2.length === 0) return 0;
+
+  // Levenshtein distance
+  const matrix: number[][] = [];
+
+  for (let i = 0; i <= s2.length; i++) {
+    matrix[i] = [i];
+  }
+
+  for (let j = 0; j <= s1.length; j++) {
+    matrix[0][j] = j;
+  }
+
+  for (let i = 1; i <= s2.length; i++) {
+    for (let j = 1; j <= s1.length; j++) {
+      if (s2.charAt(i - 1) === s1.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1, // substitution
+          matrix[i][j - 1] + 1, // insertion
+          matrix[i - 1][j] + 1 // deletion
+        );
+      }
+    }
+  }
+
+  const distance = matrix[s2.length][s1.length];
+  const maxLength = Math.max(s1.length, s2.length);
+  
+  return 1 - distance / maxLength;
+};

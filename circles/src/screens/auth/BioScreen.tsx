@@ -50,11 +50,15 @@ export default function BioScreen({ navigation }: any) {
 
   const handleContinue = () => {
     setBioToStore(bio);
+    const setLastCompletedStep = useAuthStore((state) => state.setLastCompletedStep);
+    setLastCompletedStep('bio');
     navigation.navigate(Routes.INTENT);
   };
 
   const handleSkip = () => {
     setBioToStore('');
+    const setLastCompletedStep = useAuthStore((state) => state.setLastCompletedStep);
+    setLastCompletedStep('bio');
     navigation.navigate(Routes.INTENT);
   };
 
@@ -71,7 +75,7 @@ export default function BioScreen({ navigation }: any) {
       >
         {/* Progress Indicator */}
         <View style={{ marginTop: 32, marginBottom: 40 }}>
-          <ProgressDots current={3} total={3} />
+          <ProgressDots current={3} total={4} />
         </View>
 
         {/* Heading */}

@@ -1,20 +1,22 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   ActivityIndicator,
   StyleSheet,
   Alert,
+  ScrollView,
+  SafeAreaView,
 } from 'react-native';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
-import { auth } from '../../services/firebase';
+import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
+import * as SecureStore from 'expo-secure-store';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { Routes } from '../../constants/routes';
 import Svg, { Circle } from 'react-native-svg';
-import { Ionicons } from '@expo/vector-icons';
+import { signInWithGoogle } from '../../services/auth.service';
+import { getPresetAvatarForUser, getInitials } from '../../utils/avatarUtils';
 
 /**
  * CirclesLogo
@@ -31,27 +33,36 @@ const CirclesLogo = () => {
 };
 
 /**
- * GoogleSignInScreen - Email/Password Authentication
+ * GoogleSignInScreen - Native Google OAuth Sign-In
  * 
- * Simpler alternative to phone auth
- * No billing required
+ * Users sign in via native Google OAuth in one tap.
+ * No email or phone numbers are stored in the app.
+ * This is the ONLY authentication method for the MVP.
  */
 export default function GoogleSignInScreen({ navigation }: any) {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [isSignUp, setIsSignUp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
+  const [isConfigured, setIsConfigured] = useState(false);
 
-  const handleAuth = async () => {
-    if (!email || !password) {
-      setError('Please enter email and password');
-      return;
+  useEffect(() => {
+    // Configure Google Sign-In on component mount
+    configureGoogleSignIn();
+  }, []);
+
+  const configureGoogleSignIn = async () => {
+    try {
+      GoogleSignin.configure();
+      setIsConfigured(true);
+      console.log('✓ Google Sign-In configured');
+    } catch (err) {
+      console.error('Google Sign-In config error:', err);
+      setError('Failed to configure Google Sign-In. Please check your OAuth credentials.');
     }
+  };
 
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters');
+  const handleGoogleSignIn = async () => {
+    if (!isConfigured) {
+      Alert.alert('Error', 'Google Sign-In is not configured. Please restart the app.');
       return;
     }
 
@@ -59,63 +70,85 @@ export default function GoogleSignInScreen({ navigation }: any) {
       setLoading(true);
       setError('');
 
-      if (isSignUp) {
-        // Create new account
-        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-        console.log('User created:', userCredential.user.uid);
-        // Auto-navigate to login after signup
-        setIsSignUp(false);
-        setPassword('');
-        setError('');
-        Alert.alert('Success', 'Account created! Please sign in with your credentials.');
-      } else {
-        // Sign in existing user
-        const userCredential = await signInWithEmailAndPassword(auth, email, password);
-        console.log('User signed in:', userCredential.user.uid);
-        // RootNavigator will handle navigation based on auth state
-      }
-    } catch (err: any) {
-      console.error('Auth error:', err);
-      
-      // User-friendly error messages
-      if (err.code === 'auth/email-already-in-use') {
-        setError('This email is already registered. Try signing in instead.');
-      } else if (err.code === 'auth/user-not-found') {
-        setError('No account found with this email. Try signing up instead.');
-      } else if (err.code === 'auth/wrong-password') {
-        setError('Incorrect password. Please try again.');
-      } else if (err.code === 'auth/invalid-email') {
-        setError('Invalid email address.');
-      } else {
-        setError(err.message || 'Authentication failed. Please try again.');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
+      console.log('Initiating Google Sign-In...');
 
-  const handleForgotPassword = async () => {
-    if (!email) {
-      setError('Please enter your email address first');
-      return;
-    }
+      // Sign in with Google
+      const response = await GoogleSignin.signIn();
 
-    try {
-      setLoading(true);
-      await sendPasswordResetEmail(auth, email);
-      Alert.alert(
-        'Password Reset Email Sent',
-        'Check your email for instructions to reset your password.',
-        [{ text: 'OK' }]
+      if (!response?.data) {
+        setError('Invalid response from Google Sign-In');
+        return;
+      }
+
+      const { idToken, serverAuthCode } = response.data;
+
+      if (!idToken) {
+        setError('Failed to get authentication token from Google');
+        return;
+      }
+
+      console.log('✓ Google Sign-In successful');
+      console.log('User:', response.user?.name);
+
+      // Call our Firebase auth service
+      const result = await signInWithGoogle(
+        idToken,
+        serverAuthCode || '',
+        response.user?.name,
+        response.user?.photo
       );
-    } catch (err: any) {
-      console.error('Password reset error:', err);
-      if (err.code === 'auth/user-not-found') {
-        setError('No account found with this email.');
-      } else if (err.code === 'auth/invalid-email') {
-        setError('Invalid email address.');
+
+      if (result.success && result.user) {
+        console.log('✓ Firebase authentication successful');
+
+        // Store tokens for silent re-auth
+        try {
+          await SecureStore.setItemAsync('googleIdToken', idToken);
+          if (serverAuthCode) {
+            await SecureStore.setItemAsync('googleServerAuthCode', serverAuthCode);
+          }
+        } catch (err) {
+          console.warn('Failed to store auth tokens:', err);
+        }
+
+        // Navigate to display name screen for onboarding
+        navigation.navigate(Routes.DISPLAY_NAME);
       } else {
-        setError('Failed to send reset email. Please try again.');
+        setError(result.error || 'Firebase authentication failed');
+      }
+    } catch (err: any) {
+      console.error('Google sign-in error:', err);
+
+      let errorMessage = 'Failed to sign in with Google';
+      let showRetry = true;
+
+      if (err.code === statusCodes.SIGN_IN_CANCELLED) {
+        errorMessage = 'Sign-in was cancelled';
+        showRetry = false;
+      } else if (err.code === statusCodes.IN_PROGRESS) {
+        errorMessage = 'Sign-in is already in progress';
+        showRetry = false;
+      } else if (err.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
+        errorMessage = 'Google Play Services not available on this device';
+      } else if (err.code === 'WEBVIEW_NETWORK_ERROR') {
+        errorMessage = 'Network error during sign-in. Please check your connection.';
+      } else if (err.code === 'WEBVIEW_SIGNIN_ERROR') {
+        errorMessage = 'OAuth credentials not configured. Please check app.json.';
+      }
+
+      setError(errorMessage);
+
+      if (showRetry) {
+        Alert.alert('Sign-In Error', errorMessage, [
+          {
+            text: 'Retry',
+            onPress: handleGoogleSignIn,
+          },
+          {
+            text: 'Cancel',
+            style: 'cancel',
+          },
+        ]);
       }
     } finally {
       setLoading(false);
@@ -123,80 +156,311 @@ export default function GoogleSignInScreen({ navigation }: any) {
   };
 
   return (
-    <View style={styles.container}>
-      {/* Logo Section */}
-      <View style={styles.logoSection}>
-        <CirclesLogo />
-        <Text style={styles.tagline}>
-          Connect with people you know.{'\n'}Discover people you haven't met yet.
-        </Text>
-      </View>
-
-      {/* Form Section */}
-      <View style={styles.formSection}>
-        <Text style={styles.title}>
-          {isSignUp ? 'Create Account' : 'Welcome Back'}
-        </Text>
-
-        {/* Email Input */}
-        <TextInput
-          placeholder="Email"
-          value={email}
-          onChangeText={(text) => {
-            setEmail(text);
-            if (error) setError('');
-          }}
-          keyboardType="email-address"
-          autoCapitalize="none"
-          editable={!loading}
-          style={styles.input}
-          placeholderTextColor={Colors.textTertiary}
-        />
-
-        {/* Password Input */}
-        <View style={styles.passwordContainer}>
-          <TextInput
-            placeholder="Password"
-            value={password}
-            onChangeText={(text) => {
-              setPassword(text);
-              if (error) setError('');
-            }}
-            secureTextEntry={!showPassword}
-            editable={!loading}
-            style={styles.passwordInput}
-            placeholderTextColor={Colors.textTertiary}
-          />
-          <TouchableOpacity
-            onPress={() => setShowPassword(!showPassword)}
-            style={styles.eyeIcon}
-            disabled={loading}
-          >
-            <Ionicons
-              name={showPassword ? 'eye-off-outline' : 'eye-outline'}
-              size={24}
-              color={Colors.textSecondary}
-            />
-          </TouchableOpacity>
-        </View>
-
-        {/* Forgot Password Link (only show on Sign In) */}
-        {!isSignUp && (
-          <TouchableOpacity
-            onPress={handleForgotPassword}
-            disabled={loading}
-            style={styles.forgotPasswordButton}
-          >
-            <Text style={styles.forgotPasswordText}>
-              Forgot Password?
+    <SafeAreaView style={styles.safeArea}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContainer}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={styles.container}>
+          {/* Logo Section */}
+          <View style={styles.logoSection}>
+            <CirclesLogo />
+            <Text style={styles.tagline}>
+              Connect with people you know.{'\n'}Discover people you haven't met yet.
             </Text>
-          </TouchableOpacity>
-        )}
+          </View>
 
-        {/* Error Message */}
-        {error && (
-          <Text style={styles.errorText}>{error}</Text>
-        )}
+          {/* Sign-In Section */}
+          <View style={styles.signInSection}>
+            <Text style={styles.title}>
+              Sign In with Google
+            </Text>
+
+            <Text style={styles.subtitle}>
+              One-tap sign-in. Your phone number is never collected or shared.
+            </Text>
+
+            {/* Error Message */}
+            {error && (
+              <View style={styles.errorContainer}>
+                <Text style={styles.errorText}>{error}</Text>
+              </View>
+            )}
+
+            {/* Google Sign-In Button */}
+            <TouchableOpacity
+              onPress={handleGoogleSignIn}
+              disabled={loading || !isConfigured}
+              style={[
+                styles.googleButton,
+                (loading || !isConfigured) && styles.googleButtonDisabled,
+              ]}
+            >
+              {loading ? (
+                <ActivityIndicator color={Colors.surface} size="small" />
+              ) : (
+                <Text style={styles.googleButtonText}>
+                  🔐 Sign In with Google
+                </Text>
+              )}
+            </TouchableOpacity>
+
+            {/* Configuration Warning */}
+            {!isConfigured && (
+              <View style={styles.warningContainer}>
+                <Text style={styles.warningText}>
+                  ⚠️ OAuth credentials not configured. Please set your Google OAuth client IDs in app.json
+                </Text>
+              </View>
+            )}
+
+            {/* Privacy Notice */}
+            <View style={styles.privacyContainer}>
+              <Text style={styles.privacyText}>
+                We never collect or share your phone number. Your Google email is used only for authentication and is never shared with other users.
+              </Text>
+            </View>
+          </View>
+
+          {/* Footer Info */}
+          <View style={styles.footer}>
+            <Text style={styles.footerText}>
+              By signing in, you agree to our Terms of Service and Privacy Policy.
+            </Text>
+          </View>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: Colors.surface,
+  },
+  scrollContainer: {
+    flexGrow: 1,
+    justifyContent: 'space-between',
+  },
+  container: {
+    flex: 1,
+    backgroundColor: Colors.surface,
+  },
+  logoSection: {
+    flex: 0.35,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 40,
+  },
+  tagline: {
+    marginTop: 24,
+    fontSize: Typography.fontSize.lg,
+    fontWeight: Typography.fontWeight.semibold as any,
+    color: Colors.textPrimary,
+    textAlign: 'center',
+    lineHeight: Typography.lineHeight.normal * Typography.fontSize.lg,
+  },
+  signInSection: {
+    flex: 0.5,
+    paddingHorizontal: 16,
+    paddingTop: 32,
+  },
+  title: {
+    fontSize: Typography.fontSize.xl,
+    fontWeight: Typography.fontWeight.bold as any,
+    color: Colors.textPrimary,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  subtitle: {
+    fontSize: Typography.fontSize.sm,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    marginBottom: 24,
+    lineHeight: Typography.lineHeight.normal * Typography.fontSize.sm,
+  },
+  errorContainer: {
+    backgroundColor: '#FEE2E2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+  },
+  errorText: {
+    color: '#DC2626',
+    fontSize: Typography.fontSize.sm,
+    fontWeight: Typography.fontWeight.medium as any,
+  },
+  warningContainer: {
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#FCD34D',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+  },
+  warningText: {
+    color: '#92400E',
+    fontSize: Typography.fontSize.xs,
+    fontWeight: Typography.fontWeight.medium as any,
+    lineHeight: Typography.lineHeight.normal * Typography.fontSize.xs,
+  },
+  googleButton: {
+    backgroundColor: Colors.primary,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+    elevation: 2,
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
+  },
+  googleButtonDisabled: {
+    opacity: 0.6,
+  },
+  googleButtonText: {
+    color: Colors.surface,
+    fontSize: Typography.fontSize.md,
+    fontWeight: Typography.fontWeight.bold as any,
+  },
+  privacyContainer: {
+    backgroundColor: '#F0F9FF',
+    borderLeftWidth: 4,
+    borderLeftColor: Colors.primary,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 4,
+  },
+  privacyText: {
+    fontSize: Typography.fontSize.xs,
+    color: Colors.textSecondary,
+    lineHeight: Typography.lineHeight.relaxed * Typography.fontSize.xs,
+  },
+  footer: {
+    paddingHorizontal: 16,
+    paddingBottom: 24,
+  },
+  footerText: {
+    fontSize: Typography.fontSize.xs,
+    color: Colors.textTertiary,
+    textAlign: 'center',
+    lineHeight: Typography.lineHeight.normal * Typography.fontSize.xs,
+  },
+});
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: Colors.surface,
+  },
+  scrollContainer: {
+    flexGrow: 1,
+    justifyContent: 'space-between',
+  },
+  container: {
+    flex: 1,
+    backgroundColor: Colors.surface,
+  },
+  logoSection: {
+    flex: 0.35,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 40,
+  },
+  tagline: {
+    marginTop: 24,
+    fontSize: Typography.fontSize.lg,
+    fontWeight: Typography.fontWeight.semibold as any,
+    color: Colors.textPrimary,
+    textAlign: 'center',
+    lineHeight: Typography.lineHeight.normal * Typography.fontSize.lg,
+  },
+  signInSection: {
+    flex: 0.5,
+    paddingHorizontal: 16,
+    paddingTop: 32,
+  },
+  title: {
+    fontSize: Typography.fontSize.xl,
+    fontWeight: Typography.fontWeight.bold as any,
+    color: Colors.textPrimary,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  subtitle: {
+    fontSize: Typography.fontSize.sm,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    marginBottom: 24,
+    lineHeight: Typography.lineHeight.normal * Typography.fontSize.sm,
+  },
+  errorContainer: {
+    backgroundColor: '#FEE2E2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+  },
+  errorText: {
+    color: '#DC2626',
+    fontSize: Typography.fontSize.sm,
+    fontWeight: Typography.fontWeight.medium as any,
+  },
+  googleButton: {
+    backgroundColor: Colors.primary,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+    elevation: 2,
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
+  },
+  googleButtonDisabled: {
+    opacity: 0.7,
+  },
+  googleButtonText: {
+    color: Colors.surface,
+    fontSize: Typography.fontSize.md,
+    fontWeight: Typography.fontWeight.bold as any,
+  },
+  privacyContainer: {
+    backgroundColor: '#F0F9FF',
+    borderLeftWidth: 4,
+    borderLeftColor: Colors.primary,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 4,
+  },
+  privacyText: {
+    fontSize: Typography.fontSize.xs,
+    color: Colors.textSecondary,
+    lineHeight: Typography.lineHeight.relaxed * Typography.fontSize.xs,
+  },
+  footer: {
+    paddingHorizontal: 16,
+    paddingBottom: 24,
+  },
+  footerText: {
+    fontSize: Typography.fontSize.xs,
+    color: Colors.textTertiary,
+    textAlign: 'center',
+    lineHeight: Typography.lineHeight.normal * Typography.fontSize.xs,
+  },
+});
 
         {/* Auth Button */}
         <TouchableOpacity

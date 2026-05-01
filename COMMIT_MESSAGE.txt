@@ -1,0 +1,60 @@
+feat: implement 4-factor feed relevance algorithm
+
+Implements Section 5.1 from project report - Open Feed relevance algorithm with 4 factors:
+
+1. Location Proximity (25% weight)
+   - GPS location tracking with expo-location
+   - Haversine distance calculation
+   - Geocoding for circle locations
+   - Proximity scoring (10km = 1.0, 100km+ = 0)
+
+2. Travel Context (15% weight)
+   - Track transit searches (route + date)
+   - Store in user preferences
+   - Boost matching circles (7-day window)
+   - Exact match scoring
+
+3. Join Velocity (20% weight)
+   - Track join timestamps for each member
+   - Calculate joins in last 24 hours
+   - Boost trending circles (10+ joins = 1.0)
+   - Cloud Function template for server-side calculation
+
+4. Category Affinity (20% weight)
+   - Track every circle join with category
+   - Build user preference profile
+   - Increment category affinity scores
+   - Personalized recommendations
+
+Additional Features:
+- Composite relevance scoring with configurable weights
+- Recency decay (20% weight)
+- Client-side sorting with manual filter override
+- User preferences Firestore collection
+- Comprehensive documentation
+
+New Files:
+- circles/src/hooks/useLocation.ts
+- circles/src/services/feedRelevance.service.ts
+- circles/CLOUD_FUNCTION_JOIN_VELOCITY.md
+- circles/FEED_RELEVANCE_ALGORITHM.md
+- FEED_RELEVANCE_ALGORITHM_STATUS.md
+- FEED_RELEVANCE_IMPLEMENTATION_COMPLETE.md
+- PILLAR2_OPEN_DISCOVERY_VERIFICATION.md
+- READY_TO_BUILD.md
+
+Modified Files:
+- circles/src/types/feed.types.ts (added data models)
+- circles/src/services/analytics.service.ts (added tracking)
+- circles/src/screens/main/FeedScreen.tsx (integrated algorithm)
+- circles/src/components/feed/FeedCard.tsx (track joins)
+- circles/src/screens/feed/OpenCircleDetailScreen.tsx (track joins)
+- circles/src/screens/feed/CreateOpenCircleScreen.tsx (add geoLocation)
+- circles/package.json (added expo-location)
+
+Breaking Changes: None
+Dependencies: Added expo-location ~18.0.8
+
+Testing: Requires device testing for location permissions and GPS functionality
+
+Documentation: See FEED_RELEVANCE_ALGORITHM.md for full details

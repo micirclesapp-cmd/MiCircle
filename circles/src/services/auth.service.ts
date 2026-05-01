@@ -9,6 +9,11 @@ import {
   EmailAuthProvider,
   reauthenticateWithCredential,
   deleteUser,
+  GoogleAuthProvider,
+  signInWithCredential,
+  signInWithPopup,
+  reauthenticateWithPopup,
+  User,
 } from 'firebase/auth';
 import { doc, setDoc, getDoc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
@@ -18,6 +23,7 @@ import { auth, firestore, storage } from './firebase';
  * Authentication Service
  * 
  * Handles user authentication and profile management
+ * Primary auth method: Google Sign-In (no phone numbers or exposed emails)
  */
 
 /**
@@ -431,5 +437,263 @@ export const completeOnboarding = async (): Promise<{ success: boolean; error?: 
   } catch (error: any) {
     console.error('Complete onboarding error:', error);
     return { success: false, error: 'Failed to complete onboarding' };
+  }
+};
+
+/**
+ * ========================
+ * GOOGLE SIGN-IN METHODS
+ * ========================
+ */
+
+/**
+ * Sign in with Google credential
+ * Called after Google OAuth flow returns idToken
+ */
+export const signInWithGoogle = async (
+  idToken: string,
+  accessToken: string,
+  displayName?: string,
+  photoURL?: string
+): Promise<{ success: boolean; user?: User; error?: string }> => {
+  try {
+    const credential = GoogleAuthProvider.credential(idToken, accessToken);
+    const userCredential = await signInWithCredential(auth, credential);
+    const user = userCredential.user;
+
+    // Check if user document exists in Firestore
+    const userDocRef = doc(firestore, `users/${user.uid}`);
+    const userDocSnap = await getDoc(userDocRef);
+
+    if (!userDocSnap.exists()) {
+      // New user: create Firestore document
+      // CRITICAL: Do NOT store email or phone numbers
+      await setDoc(userDocRef, {
+        uid: user.uid,
+        displayName: displayName || user.displayName || 'User',
+        avatarUrl: photoURL || null,
+        bio: '',
+        createdAt: serverTimestamp(),
+        joinedVia: 'google',
+        sessionTimestamp: Date.now(),
+        lastAuthTime: Date.now(),
+        onboardingCompleted: false,
+        subscription: 'free',
+      });
+
+      console.log('New Google user created:', user.uid);
+    } else {
+      // Existing user: update session timestamp and last auth time
+      await updateDoc(userDocRef, {
+        sessionTimestamp: Date.now(),
+        lastAuthTime: Date.now(),
+        updatedAt: serverTimestamp(),
+      });
+
+      console.log('Existing Google user logged in:', user.uid);
+    }
+
+    return { success: true, user };
+  } catch (error: any) {
+    console.error('Google sign-in error:', error);
+
+    let errorMessage = 'Failed to sign in with Google';
+
+    if (error.code === 'auth/popup-closed-by-user') {
+      errorMessage = 'Sign-in was cancelled';
+    } else if (error.code === 'auth/popup-blocked') {
+      errorMessage = 'Sign-in popup was blocked by browser';
+    } else if (error.code === 'auth/cancelled-popup-request') {
+      errorMessage = 'Sign-in request was cancelled';
+    }
+
+    return { success: false, error: errorMessage };
+  }
+};
+
+/**
+ * Silently re-authenticate with stored Google token on app open
+ * Returns true if successful, false if token expired or unavailable
+ */
+export const silentGoogleReAuth = async (): Promise<{ success: boolean; error?: string }> => {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      return { success: false, error: 'No user logged in' };
+    }
+
+    // Get fresh ID token
+    const idToken = await user.getIdToken(true);
+    console.log('Silent Google re-auth successful:', user.uid);
+
+    // Update session timestamp
+    await updateDoc(doc(firestore, `users/${user.uid}`), {
+      sessionTimestamp: Date.now(),
+      updatedAt: serverTimestamp(),
+    });
+
+    return { success: true };
+  } catch (error: any) {
+    console.error('Silent re-auth error:', error);
+    return { success: false, error: 'Failed to refresh session' };
+  }
+};
+
+/**
+ * Check if session has exceeded 30-minute timeout for sensitive actions
+ */
+export const isSessionExpiredForSensitiveAction = async (): Promise<boolean> => {
+  try {
+    const user = auth.currentUser;
+    if (!user) return true;
+
+    const userDoc = await getDoc(doc(firestore, `users/${user.uid}`));
+    if (!userDoc.exists()) return true;
+
+    const sessionTimestamp = userDoc.data()?.sessionTimestamp;
+    if (!sessionTimestamp) return true;
+
+    const thirtyMinutesMs = 30 * 60 * 1000;
+    const timeSinceLastAuth = Date.now() - sessionTimestamp;
+
+    return timeSinceLastAuth > thirtyMinutesMs;
+  } catch (error) {
+    console.error('Error checking session expiry:', error);
+    return true; // Assume expired on error for security
+  }
+};
+
+/**
+ * Prompt user to re-authenticate with Google for sensitive actions
+ */
+export const reauthenticateWithGoogle = async (): Promise<{ success: boolean; error?: string }> => {
+  try {
+    const user = auth.currentUser;
+    if (!user) throw new Error('No user logged in');
+
+    const provider = new GoogleAuthProvider();
+    await reauthenticateWithPopup(user, provider);
+
+    // Update session timestamp after successful re-auth
+    await updateDoc(doc(firestore, `users/${user.uid}`), {
+      sessionTimestamp: Date.now(),
+      updatedAt: serverTimestamp(),
+    });
+
+    console.log('Re-authentication successful:', user.uid);
+    return { success: true };
+  } catch (error: any) {
+    console.error('Re-authentication error:', error);
+
+    let errorMessage = 'Failed to re-authenticate';
+
+    if (error.code === 'auth/popup-closed-by-user') {
+      errorMessage = 'Re-authentication was cancelled';
+    } else if (error.code === 'auth/user-mismatch') {
+      errorMessage = 'You signed in with a different account';
+    }
+
+    return { success: false, error: errorMessage };
+  }
+};
+
+/**
+ * Sign out user and clear all cached session data
+ */
+export const signOutGoogle = async (): Promise<{ success: boolean; error?: string }> => {
+  try {
+    const user = auth.currentUser;
+
+    if (user) {
+      // Clear session data in Firestore
+      await updateDoc(doc(firestore, `users/${user.uid}`), {
+        sessionTimestamp: null,
+        lastAuthTime: null,
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    // Sign out from Firebase
+    await signOut(auth);
+    console.log('User signed out successfully');
+
+    return { success: true };
+  } catch (error: any) {
+    console.error('Sign out error:', error);
+    return { success: false, error: 'Failed to sign out' };
+  }
+};
+
+/**
+ * Update user display name (confirmed by user during onboarding)
+ */
+export const updateDisplayNameGoogle = async (
+  displayName: string
+): Promise<{ success: boolean; error?: string }> => {
+  try {
+    const user = auth.currentUser;
+    if (!user) throw new Error('No user logged in');
+
+    // Update Firebase Auth profile
+    await updateProfile(user, { displayName });
+
+    // Update Firestore document
+    await updateDoc(doc(firestore, `users/${user.uid}`), {
+      displayName,
+      updatedAt: serverTimestamp(),
+    });
+
+    console.log('Display name updated:', displayName);
+    return { success: true };
+  } catch (error: any) {
+    console.error('Update display name error:', error);
+    return { success: false, error: 'Failed to update display name' };
+  }
+};
+
+/**
+ * Update user avatar URL
+ */
+export const updateAvatarUrl = async (
+  avatarUrl: string
+): Promise<{ success: boolean; error?: string }> => {
+  try {
+    const user = auth.currentUser;
+    if (!user) throw new Error('No user logged in');
+
+    // Update Firestore document
+    await updateDoc(doc(firestore, `users/${user.uid}`), {
+      avatarUrl,
+      updatedAt: serverTimestamp(),
+    });
+
+    console.log('Avatar URL updated');
+    return { success: true };
+  } catch (error: any) {
+    console.error('Update avatar URL error:', error);
+    return { success: false, error: 'Failed to update avatar' };
+  }
+};
+
+/**
+ * Get cached session for offline read-only mode
+ * Returns null if no valid cached session exists
+ */
+export const getCachedSessionData = async (): Promise<{ success: boolean; data?: any; error?: string }> => {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      return { success: false, error: 'No user logged in' };
+    }
+
+    const userDoc = await getDoc(doc(firestore, `users/${user.uid}`));
+    if (!userDoc.exists()) {
+      return { success: false, error: 'User profile not found' };
+    }
+
+    return { success: true, data: userDoc.data() };
+  } catch (error: any) {
+    console.error('Error getting cached session:', error);
+    return { success: false, error: 'Failed to get session data' };
   }
 };

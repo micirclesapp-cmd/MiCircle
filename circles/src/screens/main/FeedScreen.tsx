@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   RefreshControl,
   ActivityIndicator,
+  TextInput,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -22,14 +23,17 @@ import {
   QueryDocumentSnapshot,
 } from 'firebase/firestore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { firestore } from '../../services/firebase';
+import { firestore, auth } from '../../services/firebase';
 import { Colors } from '../../constants/colors';
 import { CategoryFilter } from '../../components/feed/CategoryFilter';
 import { TransitSearchBar } from '../../components/feed/TransitSearchBar';
 import { FeedCard } from '../../components/feed/FeedCard';
 import { ScreenLayout } from '../../components/shared/ScreenLayout';
 import { useOfflineSync } from '../../hooks/useOffline';
-import type { OpenCircle, CircleCategory } from '../../types/feed.types';
+import { useLocation } from '../../hooks/useLocation';
+import { sortCirclesByRelevance, getUserPreferences } from '../../services/feedRelevance.service';
+import { trackTransitSearch } from '../../services/analytics.service';
+import type { OpenCircle, CircleCategory, UserPreferences } from '../../types/feed.types';
 
 const FEED_CACHE_KEY = 'feed_cache';
 
@@ -58,16 +62,45 @@ export const FeedScreen: React.FC = () => {
   const [selectedCity, setSelectedCity] = useState<string>('Near me 📍');
   const [showTransitSearch, setShowTransitSearch] = useState(false);
   const [transitFilter, setTransitFilter] = useState<{ route: string; date: string } | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState<'relevance' | 'newest' | 'members' | 'active'>('relevance');
+  const [showSortMenu, setShowSortMenu] = useState(false);
+
+  // User preferences for relevance algorithm
+  const [userPreferences, setUserPreferences] = useState<UserPreferences | null>(null);
+  
+  // Location for proximity scoring
+  const { location, permissionGranted } = useLocation();
 
   useEffect(() => {
     loadCircles();
+    loadUserPreferences();
   }, [selectedCategory, transitFilter]);
+
+  // Update city display when location changes
+  useEffect(() => {
+    if (location?.city) {
+      setSelectedCity(`${location.city} 📍`);
+    }
+  }, [location]);
 
   // Set up offline sync
   useOfflineSync(() => {
     console.log('Back online, refreshing feed...');
     onRefresh();
   });
+
+  const loadUserPreferences = async () => {
+    try {
+      const userId = auth.currentUser?.uid;
+      if (!userId) return;
+
+      const prefs = await getUserPreferences(userId);
+      setUserPreferences(prefs);
+    } catch (error) {
+      console.error('Error loading user preferences:', error);
+    }
+  };
 
   const loadCircles = async (loadMore = false) => {
     if (loadMore && !hasMore) return;
@@ -129,12 +162,55 @@ export const FeedScreen: React.FC = () => {
         fetchedCircles.push({ id: doc.id, ...doc.data() } as OpenCircle);
       });
 
+      // Apply relevance algorithm sorting
+      let sortedCircles = fetchedCircles;
+      
+      // Apply keyword search filter
+      if (searchQuery.trim()) {
+        const query = searchQuery.toLowerCase();
+        sortedCircles = sortedCircles.filter(circle => 
+          circle.name.toLowerCase().includes(query) ||
+          circle.pitch.toLowerCase().includes(query) ||
+          circle.tags.some(tag => tag.toLowerCase().includes(query)) ||
+          circle.location?.toLowerCase().includes(query)
+        );
+      }
+      
+      // Apply sorting
+      switch (sortBy) {
+        case 'relevance':
+          // Only apply relevance sorting if NOT using manual filters
+          if (!transitFilter && selectedCategory === 'all' && !searchQuery.trim()) {
+            sortedCircles = sortCirclesByRelevance(
+              sortedCircles,
+              location ? { latitude: location.latitude, longitude: location.longitude } : undefined,
+              userPreferences || undefined
+            );
+            console.log('Applied relevance algorithm sorting');
+          } else {
+            console.log('Using manual filter, skipping relevance sorting');
+          }
+          break;
+        case 'newest':
+          sortedCircles = sortedCircles.sort((a, b) => b.createdAt - a.createdAt);
+          break;
+        case 'members':
+          sortedCircles = sortedCircles.sort((a, b) => b.memberCount - a.memberCount);
+          break;
+        case 'active':
+          // Sort by join velocity (trending circles)
+          sortedCircles = sortedCircles.sort((a, b) => 
+            (b.joinVelocity || 0) - (a.joinVelocity || 0)
+          );
+          break;
+      }
+
       if (loadMore) {
-        setCircles((prev) => [...prev, ...fetchedCircles]);
+        setCircles((prev) => [...prev, ...sortedCircles]);
       } else {
-        setCircles(fetchedCircles);
+        setCircles(sortedCircles);
         // Save to cache
-        await saveToCache(fetchedCircles);
+        await saveToCache(sortedCircles);
       }
 
       setLastDoc(snapshot.docs[snapshot.docs.length - 1] || null);
@@ -181,9 +257,12 @@ export const FeedScreen: React.FC = () => {
     }
   };
 
-  const handleTransitSearch = (route: string, date: string) => {
+  const handleTransitSearch = async (route: string, date: string) => {
     setTransitFilter({ route, date });
     setShowTransitSearch(false);
+    
+    // Track transit search for travel context scoring
+    await trackTransitSearch(route, date);
   };
 
   const handleCancelTransitSearch = () => {
@@ -209,7 +288,7 @@ export const FeedScreen: React.FC = () => {
         style={styles.emptyButton}
         onPress={() => navigation.navigate('CreateOpenCircleScreen')}
       >
-        <Text style={styles.emptyButtonText}>Create Circle</Text>
+        <Text style={styles.emptyButtonText}>Post a Card</Text>
       </TouchableOpacity>
     </View>
   );
@@ -242,13 +321,76 @@ export const FeedScreen: React.FC = () => {
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Discover</Text>
-        <TouchableOpacity
-          style={styles.searchIcon}
-          onPress={() => setShowTransitSearch(true)}
-        >
-          <Text style={styles.searchIconText}>🔍</Text>
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={styles.headerButton}
+            onPress={() => setShowSortMenu(!showSortMenu)}
+          >
+            <Text style={styles.headerButtonText}>⚙️</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.headerButton}
+            onPress={() => setShowTransitSearch(true)}
+          >
+            <Text style={styles.headerButtonText}>🔍</Text>
+          </TouchableOpacity>
+        </View>
       </View>
+
+      {/* Search Bar */}
+      <View style={styles.searchBar}>
+        <Text style={styles.searchIcon}>🔍</Text>
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Search circles..."
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          placeholderTextColor={Colors.textTertiary}
+        />
+        {searchQuery.length > 0 && (
+          <TouchableOpacity onPress={() => setSearchQuery('')}>
+            <Text style={styles.clearButton}>✕</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {/* Sort Menu */}
+      {showSortMenu && (
+        <View style={styles.sortMenu}>
+          <TouchableOpacity
+            style={[styles.sortOption, sortBy === 'relevance' && styles.sortOptionActive]}
+            onPress={() => { setSortBy('relevance'); setShowSortMenu(false); }}
+          >
+            <Text style={[styles.sortOptionText, sortBy === 'relevance' && styles.sortOptionTextActive]}>
+              ✨ Relevance
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.sortOption, sortBy === 'newest' && styles.sortOptionActive]}
+            onPress={() => { setSortBy('newest'); setShowSortMenu(false); }}
+          >
+            <Text style={[styles.sortOptionText, sortBy === 'newest' && styles.sortOptionTextActive]}>
+              🕐 Newest
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.sortOption, sortBy === 'members' && styles.sortOptionActive]}
+            onPress={() => { setSortBy('members'); setShowSortMenu(false); }}
+          >
+            <Text style={[styles.sortOptionText, sortBy === 'members' && styles.sortOptionTextActive]}>
+              👥 Most Members
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.sortOption, sortBy === 'active' && styles.sortOptionActive]}
+            onPress={() => { setSortBy('active'); setShowSortMenu(false); }}
+          >
+            <Text style={[styles.sortOptionText, sortBy === 'active' && styles.sortOptionTextActive]}>
+              🔥 Most Active
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Category Filter */}
       <CategoryFilter
@@ -346,11 +488,61 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: Colors.textPrimary,
   },
-  searchIcon: {
+  headerActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  headerButton: {
     padding: 8,
   },
-  searchIconText: {
+  headerButtonText: {
     fontSize: 24,
+  },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  searchIcon: {
+    fontSize: 18,
+    marginRight: 8,
+    color: Colors.textSecondary,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 16,
+    color: Colors.textPrimary,
+    padding: 0,
+  },
+  clearButton: {
+    fontSize: 20,
+    color: Colors.textSecondary,
+    paddingHorizontal: 8,
+  },
+  sortMenu: {
+    backgroundColor: Colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+    paddingVertical: 8,
+  },
+  sortOption: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  sortOptionActive: {
+    backgroundColor: Colors.primaryLight,
+  },
+  sortOptionText: {
+    fontSize: 16,
+    color: Colors.textPrimary,
+  },
+  sortOptionTextActive: {
+    fontWeight: '700',
+    color: Colors.primary,
   },
   locationBar: {
     backgroundColor: Colors.surface,

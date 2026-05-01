@@ -53,6 +53,42 @@ const PHOTO_PRESETS: PhotoPreset[] = [
     icon: '🌸',
     bgColor: '#FF69B4',
   },
+  {
+    id: 'preset-7',
+    label: 'Ocean',
+    icon: '🌊',
+    bgColor: '#1E90FF',
+  },
+  {
+    id: 'preset-8',
+    label: 'Desert',
+    icon: '🏜️',
+    bgColor: '#DAA520',
+  },
+  {
+    id: 'preset-9',
+    label: 'Aurora',
+    icon: '🌌',
+    bgColor: '#00CED1',
+  },
+  {
+    id: 'preset-10',
+    label: 'Sunset',
+    icon: '🌅',
+    bgColor: '#FF6347',
+  },
+  {
+    id: 'preset-11',
+    label: 'Snowy',
+    icon: '❄️',
+    bgColor: '#F0F8FF',
+  },
+  {
+    id: 'preset-12',
+    label: 'Tropical',
+    icon: '🌴',
+    bgColor: '#32CD32',
+  },
 ];
 
 interface CreateCircleStep2Props {

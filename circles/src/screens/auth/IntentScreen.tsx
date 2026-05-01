@@ -86,9 +86,11 @@ export default function IntentScreen({ navigation }: any) {
   const displayName = useAuthStore((state) => state.displayName);
   const avatarUrl = useAuthStore((state) => state.avatarUrl);
   const bio = useAuthStore((state) => state.bio);
+  const setUserIntent = useAuthStore((state) => state.setUserIntent);
+  const reset = useAuthStore((state) => state.reset);
 
   /**
-   * Create user document in Firestore
+   * Create user document in Firestore with complete onboarding data
    * CRITICAL: Phone number is NOT included (stored only in Firebase Auth)
    */
   const createUserDocument = async (intent: 'circles' | 'feed' | 'both') => {
@@ -100,18 +102,35 @@ export default function IntentScreen({ navigation }: any) {
         throw new Error('No authenticated user');
       }
 
-      // Write user document to Firestore
+      const now = Date.now();
+
+      // Write user document to Firestore with all onboarding fields
       // NO phoneNumber field — it stays only in Firebase Auth
       await setDoc(doc(firestore, 'users', uid), {
+        // User identity (from Google Sign-In)
         uid,
         displayName: displayName || 'User',
         avatarUrl: avatarUrl || `preset:${PRESET_AVATARS[0].id}`,
         bio: bio || '',
+        joinedVia: 'google',
+
+        // Onboarding
+        userIntent: intent,
+        onboardingCompleted: true,
         joinYear: new Date().getFullYear(),
-        createdAt: Date.now(),
+
+        // Session tracking (for 30-min sensitive action timeout)
+        sessionTimestamp: now,
+        lastAuthTime: now,
+
+        // App management
         subscription: 'free',
-        intent,
+        createdAt: now,
+        updatedAt: now,
       });
+
+      // Clear temporary onboarding data from store
+      reset();
 
       // Navigate to MainTabNavigator with appropriate default tab
       if (intent === 'circles') {
@@ -129,16 +148,39 @@ export default function IntentScreen({ navigation }: any) {
   };
 
   const handleConnectWithPeople = () => {
+    setUserIntent('circles');
     createUserDocument('circles');
   };
 
   const handleMeetNewPeople = () => {
+    setUserIntent('feed');
     createUserDocument('feed');
   };
 
   const handleBoth = () => {
+    setUserIntent('both');
     createUserDocument('both');
   };
+
+  // Progress Indicator Dots
+  const ProgressDots: React.FC<{ current: number; total: number }> = ({
+    current,
+    total,
+  }) => (
+    <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 8, marginBottom: 40 }}>
+      {[...Array(total)].map((_, i) => (
+        <View
+          key={i}
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: 4,
+            backgroundColor: i < current ? Colors.primary : Colors.border,
+          }}
+        />
+      ))}
+    </View>
+  );
 
   return (
     <View
@@ -149,6 +191,9 @@ export default function IntentScreen({ navigation }: any) {
         paddingHorizontal: 16,
       }}
     >
+      {/* Progress Indicator */}
+      <ProgressDots current={4} total={4} />
+
       {/* Heading */}
       <Text
         style={{
