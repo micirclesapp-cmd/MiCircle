@@ -34,5 +34,10 @@ export {
   cleanupAvailabilityChecks,
 } from './availabilityFunctions';
 
+// Memory Lane functions
+export {
+  onMemoryPhotoUploaded,
+} from './memoryFunctions';
+
 // Add more function exports here as needed
 // export { functionName } from './functionFile';

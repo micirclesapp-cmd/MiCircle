@@ -19,7 +19,7 @@ import {
   query,
   orderBy,
   onSnapshot,
-  addDoc,
+  setDoc,
   updateDoc,
   doc,
   serverTimestamp,
@@ -426,8 +426,11 @@ export default function CircleMemoryLaneScreen({
         { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
       );
 
+      // Pre-generate Firestore document reference to get ID
+      const memoryRef = doc(collection(firestore, `circles/${circleId}/memories`));
+      const photoId = memoryRef.id;
+
       // Upload to Firebase Storage
-      const photoId = `photo_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       const photoRef = storageRef(storage, `circles/${circleId}/memories/${photoId}.jpg`);
 
       const response = await fetch(manipResult.uri);
@@ -458,7 +461,7 @@ export default function CircleMemoryLaneScreen({
       }
 
       // Write metadata to Firestore
-      await addDoc(collection(firestore, `circles/${circleId}/memories`), {
+      await setDoc(memoryRef, {
         storageUrl: downloadUrl,
         thumbnailUrl: downloadUrl, // Could generate actual thumbnail
         uploaderUid: currentUid,
