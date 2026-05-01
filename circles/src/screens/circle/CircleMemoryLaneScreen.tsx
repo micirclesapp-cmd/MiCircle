@@ -262,6 +262,8 @@ export default function CircleMemoryLaneScreen({
   const [viewerVisible, setViewerVisible] = useState(false);
   const [viewerIndex, setViewerIndex] = useState(0);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
+  const [failedUploads, setFailedUploads] = useState<string[]>([]);
 
   // Load photos
   useEffect(() => {
@@ -367,6 +369,9 @@ export default function CircleMemoryLaneScreen({
       Alert.alert('Limit Reached', 'Free circles are limited to 100 photos. Upgrade to Circles+ to upload more!');
       return;
     }
+    if (photos.length >= 90) {
+      Alert.alert('Approaching Limit', 'You are nearing the 100 photo limit for free circles. Upgrade to Circles+ to unlock 5GB of storage!');
+    }
 
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') {
@@ -380,7 +385,12 @@ export default function CircleMemoryLaneScreen({
     });
 
     if (!result.canceled && result.assets[0]) {
-      await uploadPhoto(result.assets[0].uri);
+      setUploading(true);
+      const success = await uploadPhoto(result.assets[0].uri);
+      if (!success) {
+        setFailedUploads(prev => [...prev, result.assets[0].uri]);
+      }
+      setUploading(false);
     }
   };
 
@@ -388,6 +398,9 @@ export default function CircleMemoryLaneScreen({
     if (photos.length >= 100) {
       Alert.alert('Limit Reached', 'Free circles are limited to 100 photos. Upgrade to Circles+ to upload more!');
       return;
+    }
+    if (photos.length >= 90) {
+      Alert.alert('Approaching Limit', 'You are nearing the 100 photo limit for free circles. Upgrade to Circles+ to unlock 5GB of storage!');
     }
 
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -407,16 +420,55 @@ export default function CircleMemoryLaneScreen({
     });
 
     if (!result.canceled) {
-      for (const asset of result.assets) {
-        await uploadPhoto(asset.uri);
+      const validAssets = result.assets.filter(a => a.type === 'image' || !a.type || a.uri.endsWith('.jpg') || a.uri.endsWith('.png'));
+      if (validAssets.length < result.assets.length) {
+        Alert.alert('Invalid Files', 'Please select image files only');
+      }
+
+      setUploading(true);
+      setUploadProgress({ current: 0, total: validAssets.length });
+      const newFailedUploads: string[] = [];
+
+      for (let i = 0; i < validAssets.length; i++) {
+        setUploadProgress({ current: i + 1, total: validAssets.length });
+        const success = await uploadPhoto(validAssets[i].uri);
+        if (!success) {
+          newFailedUploads.push(validAssets[i].uri);
+        }
+      }
+
+      setUploadProgress(null);
+      setUploading(false);
+      if (newFailedUploads.length > 0) {
+        setFailedUploads(prev => [...prev, ...newFailedUploads]);
       }
     }
   };
 
-  const uploadPhoto = async (uri: string) => {
-    if (!currentUid) return;
-
+  const retryFailedUploads = async () => {
+    const toRetry = [...failedUploads];
+    setFailedUploads([]);
     setUploading(true);
+    setUploadProgress({ current: 0, total: toRetry.length });
+
+    const newFailed: string[] = [];
+    for (let i = 0; i < toRetry.length; i++) {
+      setUploadProgress({ current: i + 1, total: toRetry.length });
+      const success = await uploadPhoto(toRetry[i]);
+      if (!success) {
+        newFailed.push(toRetry[i]);
+      }
+    }
+
+    setUploadProgress(null);
+    setUploading(false);
+    if (newFailed.length > 0) {
+      setFailedUploads(prev => [...prev, ...newFailed]);
+    }
+  };
+
+  const uploadPhoto = async (uri: string): Promise<boolean> => {
+    if (!currentUid) return false;
 
     try {
       // Compress image
@@ -474,11 +526,10 @@ export default function CircleMemoryLaneScreen({
       });
 
       console.log('Photo uploaded:', photoId);
+      return true;
     } catch (error) {
       console.error('Error uploading photo:', error);
-      Alert.alert('Error', 'Failed to upload photo');
-    } finally {
-      setUploading(false);
+      return false;
     }
   };
 
@@ -624,6 +675,25 @@ export default function CircleMemoryLaneScreen({
         ))}
       </ScrollView>
 
+      {/* Upload Progress & Failed State */}
+      {uploadProgress && (
+        <View style={styles.progressBanner}>
+          <Text style={styles.progressText}>
+            Uploading {uploadProgress.current} of {uploadProgress.total}...
+          </Text>
+        </View>
+      )}
+      {failedUploads.length > 0 && !uploading && (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorText}>
+            {failedUploads.length} photo{failedUploads.length > 1 ? 's' : ''} failed to upload.
+          </Text>
+          <TouchableOpacity onPress={retryFailedUploads} style={styles.retryButton}>
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* Photo grid */}
       <FlatList
         data={filteredPhotos}
@@ -709,6 +779,42 @@ const styles = StyleSheet.create({
   },
   filterPillTextActive: {
     color: Colors.surface,
+  },
+  progressBanner: {
+    backgroundColor: Colors.primary,
+    padding: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  progressText: {
+    color: Colors.surface,
+    fontSize: Typography.fontSize.sm,
+    fontWeight: Typography.fontWeight.semibold,
+  },
+  errorBanner: {
+    backgroundColor: '#FFF3CD',
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderBottomWidth: 1,
+    borderBottomColor: '#FFE69C',
+  },
+  errorText: {
+    color: '#856404',
+    fontSize: Typography.fontSize.sm,
+    flex: 1,
+  },
+  retryButton: {
+    backgroundColor: '#856404',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  retryButtonText: {
+    color: Colors.surface,
+    fontSize: Typography.fontSize.xs,
+    fontWeight: Typography.fontWeight.semibold,
   },
   grid: {
     padding: GAP,
