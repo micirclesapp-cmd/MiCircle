@@ -82,7 +82,7 @@ export const FeedScreen: React.FC = () => {
     // If we're waiting for the first GPS location to resolve, wait a bit
     if (locationLoading && selectedCity === 'Near me 📍') return;
     loadCircles();
-  }, [selectedCategory, transitFilter, selectedCity, searchQuery]);
+  }, [selectedCategory, transitFilter, selectedCity, searchQuery, locationLoading]);
 
   // Set up offline sync
   useOfflineSync(() => {

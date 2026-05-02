@@ -8,6 +8,7 @@ import {
   Switch,
   ActivityIndicator,
   TextInput,
+  Alert,
 } from 'react-native';
 import { signOut } from 'firebase/auth';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
@@ -118,12 +119,18 @@ export default function ProfileScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Account</Text>
 
-        <TouchableOpacity style={styles.menuItem}>
+        <TouchableOpacity 
+          style={styles.menuItem}
+          onPress={() => Alert.alert('Coming Soon', 'Profile editing will be available in the next update.')}
+        >
           <Text style={styles.menuItemText}>Edit Profile</Text>
           <Text style={styles.menuItemArrow}>→</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.menuItem}>
+        <TouchableOpacity 
+          style={styles.menuItem}
+          onPress={() => Alert.alert('Coming Soon', 'Privacy settings will be available in the next update.')}
+        >
           <Text style={styles.menuItemText}>Privacy</Text>
           <Text style={styles.menuItemArrow}>→</Text>
         </TouchableOpacity>
@@ -207,17 +214,26 @@ export default function ProfileScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>About</Text>
 
-        <TouchableOpacity style={styles.menuItem}>
+        <TouchableOpacity 
+          style={styles.menuItem}
+          onPress={() => Alert.alert('Support', 'Please email support@circlesapp.com for assistance.')}
+        >
           <Text style={styles.menuItemText}>Help & Support</Text>
           <Text style={styles.menuItemArrow}>→</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.menuItem}>
+        <TouchableOpacity 
+          style={styles.menuItem}
+          onPress={() => Alert.alert('Terms of Service', 'View our terms at circlesapp.com/terms')}
+        >
           <Text style={styles.menuItemText}>Terms of Service</Text>
           <Text style={styles.menuItemArrow}>→</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.menuItem}>
+        <TouchableOpacity 
+          style={styles.menuItem}
+          onPress={() => Alert.alert('Privacy Policy', 'View our privacy policy at circlesapp.com/privacy')}
+        >
           <Text style={styles.menuItemText}>Privacy Policy</Text>
           <Text style={styles.menuItemArrow}>→</Text>
         </TouchableOpacity>
