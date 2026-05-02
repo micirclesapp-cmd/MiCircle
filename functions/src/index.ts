@@ -40,4 +40,5 @@ export {
 } from './memoryFunctions';
 
 // Add more function exports here as needed
-// export { functionName } from './functionFile';
+export { rankFeed } from './rankFeed';
+export { onReportCreated } from './autoHideModeration';

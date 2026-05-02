@@ -420,11 +420,43 @@ export const sendRSVPNudges = functions.pubsub
  */
 export const onNewTransitCircle = functions.firestore
   .document('public_circles/{cardId}')
-  .onCreate(async (snapshot, _context) => {
+  .onCreate(async (snapshot, context) => {
     const circle = snapshot.data();
     if (!circle.transitRoute || !circle.transitDate) return;
     console.log('New transit circle created:', circle.name);
-    // TODO: Query users with saved routes matching circle.transitRoute
+    
+    try {
+      const usersSnapshot = await firestore.collection('users').get();
+      const matchedUserIds: string[] = [];
+
+      for (const userDoc of usersSnapshot.docs) {
+        if (userDoc.id === circle.creatorUid) continue; // Don't notify creator
+
+        const userData = userDoc.data();
+        const savedRoutes = userData.savedRoutes || [];
+        
+        if (savedRoutes.includes(circle.transitRoute)) {
+          matchedUserIds.push(userDoc.id);
+        }
+      }
+
+      if (matchedUserIds.length > 0) {
+        await sendPushNotifications(
+          matchedUserIds,
+          'New Transit Circle 🚆',
+          `A new circle for route ${circle.transitRoute} on ${circle.transitDate} was just created.`,
+          {
+            type: 'new_transit_circle',
+            circleId: context.params.cardId,
+            route: circle.transitRoute,
+          },
+          'messages'
+        );
+        console.log(`Notified ${matchedUserIds.length} users about new transit circle.`);
+      }
+    } catch (error) {
+      console.error('Error notifying users for new transit circle:', error);
+    }
   });
 
 /**

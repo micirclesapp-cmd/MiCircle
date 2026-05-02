@@ -13,7 +13,7 @@ import {
 } from 'firebase/firestore';
 import { ref, push, set } from 'firebase/database';
 import { firestore, realtimeDb, auth } from './firebase';
-import { Plan, PlanType } from '../types/plan.types';
+import { Plan, PlanType, RSVPStatus } from '../types/plan.types';
 
 /**
  * Plan Service
@@ -27,15 +27,12 @@ import { Plan, PlanType } from '../types/plan.types';
 export const createPlan = async (data: {
   circleId: string;
   title: string;
-  description?: string;
   type: PlanType;
   date: string;
   time?: string;
   location?: string;
-  restaurant?: string;
-  movie?: string;
-  destination?: string;
-  budget?: number;
+  details: Record<string, any>;
+  creatorName: string;
 }): Promise<{ success: boolean; planId?: string; error?: string }> => {
   try {
     const currentUser = auth.currentUser;
@@ -45,12 +42,10 @@ export const createPlan = async (data: {
       ...data,
       creatorUid: currentUser.uid,
       rsvps: {
-        going: [currentUser.uid],
-        maybe: [],
-        cantMakeIt: [],
+        [currentUser.uid]: 'going',
       },
       createdAt: serverTimestamp(),
-      status: 'upcoming',
+      isArchived: false,
     };
 
     const docRef = await addDoc(
@@ -92,11 +87,22 @@ export const getPlans = async (
     );
 
     if (status) {
-      q = query(
-        collection(firestore, `circles/${circleId}/plans`),
-        where('status', '==', status),
-        orderBy('date', 'desc')
-      );
+      const now = new Date().toISOString();
+      if (status === 'upcoming') {
+        q = query(
+          collection(firestore, `circles/${circleId}/plans`),
+          where('date', '>=', now),
+          where('isArchived', '==', false),
+          orderBy('date', 'asc')
+        );
+      } else {
+        q = query(
+          collection(firestore, `circles/${circleId}/plans`),
+          where('date', '<', now),
+          where('isArchived', '==', false),
+          orderBy('date', 'desc')
+        );
+      }
     }
 
     const snapshot = await getDocs(q);
@@ -144,33 +150,16 @@ export const getPlan = async (
 export const updateRSVP = async (
   circleId: string,
   planId: string,
-  response: 'going' | 'maybe' | 'cantMakeIt'
+  response: RSVPStatus
 ): Promise<{ success: boolean; error?: string }> => {
   try {
     const currentUser = auth.currentUser;
     if (!currentUser) throw new Error('No user logged in');
 
     const planRef = doc(firestore, `circles/${circleId}/plans/${planId}`);
-    const planDoc = await getDoc(planRef);
-
-    if (!planDoc.exists()) {
-      return { success: false, error: 'Plan not found' };
-    }
-
-    const planData = planDoc.data() as Plan;
-
-    // Remove user from all RSVP lists
-    const updatedRsvps = {
-      going: planData.rsvps.going.filter((uid) => uid !== currentUser.uid),
-      maybe: planData.rsvps.maybe.filter((uid) => uid !== currentUser.uid),
-      cantMakeIt: planData.rsvps.cantMakeIt.filter((uid) => uid !== currentUser.uid),
-    };
-
-    // Add user to selected RSVP list
-    updatedRsvps[response].push(currentUser.uid);
-
+    
     await updateDoc(planRef, {
-      rsvps: updatedRsvps,
+      [`rsvps.${currentUser.uid}`]: response,
     });
 
     console.log('RSVP updated:', planId, response);
@@ -237,7 +226,7 @@ export const completePlan = async (
     const planRef = doc(firestore, `circles/${circleId}/plans/${planId}`);
 
     await updateDoc(planRef, {
-      status: 'past',
+      isArchived: true,
       completedAt: serverTimestamp(),
     });
 
@@ -256,17 +245,21 @@ export const completePlan = async (
 export const getRSVPCount = (plan: Plan): {
   going: number;
   maybe: number;
-  cantMakeIt: number;
+  cantmake: number;
   total: number;
 } => {
+  let going = 0, maybe = 0, cantmake = 0;
+  Object.values(plan.rsvps || {}).forEach(status => {
+    if (status === 'going') going++;
+    if (status === 'maybe') maybe++;
+    if (status === 'cantmake') cantmake++;
+  });
+  
   return {
-    going: plan.rsvps.going.length,
-    maybe: plan.rsvps.maybe.length,
-    cantMakeIt: plan.rsvps.cantMakeIt.length,
-    total:
-      plan.rsvps.going.length +
-      plan.rsvps.maybe.length +
-      plan.rsvps.cantMakeIt.length,
+    going,
+    maybe,
+    cantmake,
+    total: going + maybe + cantmake,
   };
 };
 
@@ -276,11 +269,8 @@ export const getRSVPCount = (plan: Plan): {
 export const getUserRSVP = (
   plan: Plan,
   userId: string
-): 'going' | 'maybe' | 'cantMakeIt' | null => {
-  if (plan.rsvps.going.includes(userId)) return 'going';
-  if (plan.rsvps.maybe.includes(userId)) return 'maybe';
-  if (plan.rsvps.cantMakeIt.includes(userId)) return 'cantMakeIt';
-  return null;
+): RSVPStatus | null => {
+  return plan.rsvps?.[userId] || null;
 };
 
 /**
